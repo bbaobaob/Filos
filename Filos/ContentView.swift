@@ -2,20 +2,21 @@
 //  ContentView.swift
 //  Filos
 //
-//  Created by lunginspector on 7/16/26.
+//  Created by lunginspector on 7/12/26.
 //
 
 import SwiftUI
 
 struct ContentView: View {
+    @EnvironmentObject var mgr: FilosManager
+    
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        NavigationStack(path: $mgr.fmNavPath) {
+            FileBrowserView(path: URL(fileURLWithPath: "/"), navigationPath: $mgr.fmNavPath)
+                .navigationDestination(for: URL.self) { path in
+                    FileBrowserView(path: path, navigationPath: $mgr.fmNavPath)
+                }
         }
-        .padding()
     }
 }
 

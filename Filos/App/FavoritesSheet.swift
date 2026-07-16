@@ -19,7 +19,7 @@ struct FavoritesSheet: View {
     @Binding var navPath: NavigationPath
     
     @AppStorage("favList") var favList: [FavoriteItem] = [
-        FavoriteItem(label: "Blade Documents", path: URL.documentsDirectory.path)
+        FavoriteItem(label: "Filos Documents", path: URL.documentsDirectory.path)
     ]
     
     @State private var label: String = ""
@@ -80,6 +80,15 @@ struct FavoritesSheet: View {
             }
             .navigationTitle("Favorites")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        favList = [
+                            FavoriteItem(label: "Filos Documents", path: URL.documentsDirectory.path)
+                        ]
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         dismiss()
