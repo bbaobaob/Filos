@@ -8,6 +8,7 @@
 import SwiftUI
 import PartyUI
 import QuickLook
+import ZIPFoundation
 
 struct FolderRow: View {
     @EnvironmentObject var mgr: FilosManager
@@ -67,6 +68,26 @@ struct FolderRow: View {
                 previewURL = file.url
             } label: {
                 Label("Quick Look", systemImage: "eye")
+            }
+            
+            Button {
+                do {
+                    let destination = file.url
+                        .deletingLastPathComponent()
+                        .appendingPathComponent(file.url.lastPathComponent + ".zip")
+
+                    try FileManager.default.zipItem(
+                        at: file.url,
+                        to: destination,
+                        shouldKeepParent: true
+                    )
+
+                    mgr.refreshFiles.toggle()
+                } catch {
+                    print("Failed to zip: \(error)")
+                }
+            } label: {
+                Label("Compress", systemImage: "archivebox")
             }
             
             if let index = favList.firstIndex(where: { $0.path == file.url.path }) {

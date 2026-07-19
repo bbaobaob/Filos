@@ -8,6 +8,7 @@
 import SwiftUI
 import PartyUI
 import QuickLook
+import ZIPFoundation
 
 struct FileRow: View {
     @EnvironmentObject var mgr: FilosManager
@@ -73,6 +74,28 @@ struct FileRow: View {
                 previewURL = file.url
             } label: {
                 Label("Quick Look", systemImage: "eye")
+            }
+            
+            if let type = UTType(fileInfo.uttype), type.conforms(to: .zip) {
+                Button {
+                    do {
+                        let destination = file.url.deletingPathExtension()
+
+                        try FileManager.default.createDirectory(
+                            at: destination,
+                            withIntermediateDirectories: true
+                        )
+
+                        try FileManager.default.unzipItem(
+                            at: file.url,
+                            to: destination
+                        )
+                    } catch {
+                        print("(fm) failed to unzip file: \(error)")
+                    }
+                } label: {
+                    Label("Extract Archive", systemImage: "archivebox")
+                }
             }
             
             if fileInfo.uttype == "com.apple.property-list" {

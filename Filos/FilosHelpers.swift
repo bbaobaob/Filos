@@ -197,4 +197,3 @@ func getFolderType(url: URL) -> FolderType {
     }
     return .normal
 }
-

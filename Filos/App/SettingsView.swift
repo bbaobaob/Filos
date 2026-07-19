@@ -85,6 +85,7 @@ struct SettingsView: View {
                 Section {
                     LinkCreditCell(image: Image("lunginspector"), name: "lunginspector", description: "Primary developer.", url: "https://github.com/lunginspector")
                     LinkCreditCell(image: Image("skadz"), name: "Skadz", description: "SBX-related stuff and some file browser things.", url: "https://github.com/skadz108")
+                    LinkCreditCell(image: Image("roooot"), name: "roooot", description: "Archiving Utilities.", url: "https://github.com/rooootdev")
                 } header: {
                     HeaderLabel(text: "Credits", icon: "star")
                 }
