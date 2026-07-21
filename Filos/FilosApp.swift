@@ -114,3 +114,12 @@ func machineName() -> String {
         return identifier + String(UnicodeScalar(UInt8(value)))
     }
 }
+
+extension ButtonRole {
+    static var adaptiveConfirm: ButtonRole? {
+        if #available(iOS 19.0, *) {
+            return .confirm
+        }
+        return nil
+    }
+}

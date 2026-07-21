@@ -11,42 +11,120 @@ import PartyUI
 struct FileTextSheet: View {
     var name: String
     var path: String
-    @State private var text: String = ""
+    @State private var fileText: String = ""
+    @State private var editText: String = ""
+    @State private var isEditing = false
     @Environment(\.dismiss) var dismiss
     
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    Text(text)
-                        .font(.system(size: 10, design: .monospaced))
+            ScrollView {
+                VStack(alignment: .leading) {
+                    if isEditing {
+                        TextEditor(text: $editText)
+                            .font(.system(size: 10, design: .monospaced))
+                    } else {
+                        Text(fileText)
+                            .font(.system(size: 10, design: .monospaced))
+                            .padding(5)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .navigationTitle(name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        Haptic.shared.play(.soft)
-                        UIPasteboard.general.string = text
-                    } label: {
-                        Image(systemName: "doc.on.doc")
+                if isEditing {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            isEditing = false
+                            editText = fileText
+                        } label: {
+                            Label("Cancel", systemImage: "xmark")
+                        }
+                        .labelStyle(.iconOnly)
                     }
-                    .contentShape(.rect)
+                    
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(role: .adaptiveConfirm) {
+                            let res = writeTextIntoFile(URL(fileURLWithPath: path), string: editText)
+                            if res {
+                                isEditing = false
+                                fileText = getTextFromFile(URL(fileURLWithPath: path))
+                            }
+                        } label: {
+                            Label("Confirm", systemImage: "checkmark")
+                        }
+                        .labelStyle(.iconOnly)
+                    }
+                } else {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Menu {
+                            if !isEditing {
+                                Button {
+                                    isEditing = true
+                                } label: {
+                                    Label("Edit", systemImage: "pencil")
+                                }
+                            }
+                            
+                            Button {
+                                Haptic.shared.play(.soft)
+                                UIPasteboard.general.string = fileText
+                            } label: {
+                                Label("Copy", systemImage: "doc.on.doc")
+                            }
+                        } label: {
+                            Label("Menu", systemImage: "ellipsis")
+                        }
+                        .labelStyle(.iconOnly)
+                    }
+                    
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            dismiss()
+                        } label: {
+                            if #available(iOS 19.0, *) {
+                                Label("Close", systemImage: "xmark")
+                            } else {
+                                Text("Close")
+                            }
+                        }
+                        .labelStyle(.iconOnly)
+                    }
                 }
-                
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: {
-                        dismiss()
-                    }) {
-                        CloseSheetLabel()
-                    }
-                    .contentShape(.rect)
+            }
+            .onChange(of: isEditing) { editing in
+                if editing && fileText.isEmpty {
+                    editText = "add text here..."
                 }
             }
             .onAppear {
-                text = getFileText(path: path)
+                let text = getTextFromFile(URL(fileURLWithPath: path))
+                fileText = text
+                editText = text
             }
         }
+    }
+    
+    private func getTextFromFile(_ url: URL) -> String {
+        do {
+            let string = try String(contentsOf: url, encoding: .utf8)
+            return string
+        } catch {
+            print("[!] failed to get text from file: \(error)")
+        }
+        return ""
+    }
+    
+    private func writeTextIntoFile(_ url: URL, string: String) -> Bool {
+        do {
+            let data = Data(string.utf8)
+            try data.write(to: url)
+            return true
+        } catch {
+            print("[!] failed to write data: \(error)")
+        }
+        return false
     }
 }

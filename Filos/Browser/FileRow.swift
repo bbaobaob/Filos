@@ -27,6 +27,8 @@ struct FileRow: View {
         Button {
             if isPlist() {
                 showFilePlistSheet.toggle()
+            } else if isText() {
+                showTextSheet.toggle()
             } else {
                 previewURL = file.url
             }
@@ -106,10 +108,12 @@ struct FileRow: View {
                 }
             }
             
-            Button {
-                showTextSheet.toggle()
-            } label: {
-                Label("Text Viewer", systemImage: "doc.plaintext")
+            if isText() {
+                Button {
+                    showTextSheet.toggle()
+                } label: {
+                    Label("Text Viewer", systemImage: "doc.plaintext")
+                }
             }
             
             if let index = favList.firstIndex(where: { $0.path == file.url.path }) {
@@ -181,6 +185,15 @@ struct FileRow: View {
         do {
             let data = try Data(contentsOf: file.url)
             try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+            return true
+        } catch {
+            return false
+        }
+    }
+    
+    private func isText() -> Bool {
+        do {
+            let _ = try String(contentsOf: file.url, encoding: .utf8)
             return true
         } catch {
             return false
