@@ -104,8 +104,9 @@ struct FileBrowserView: View {
                     }
                     .disabled(chosenSort == .system)
                 } label: {
-                    Image(systemName: "line.3.horizontal.decrease")
+                    Label("Sort", systemImage: "line.3.horizontal.decrease")
                 }
+                .labelStyle(.iconOnly)
             }
             
             ToolbarItem(placement: .topBarTrailing) {
@@ -172,8 +173,9 @@ struct FileBrowserView: View {
                         Label("Settings", systemImage: "gear")
                     }
                 } label: {
-                    Image(systemName: "ellipsis")
+                    Label("Actions", systemImage: "ellipsis")
                 }
+                .labelStyle(.iconOnly)
             }
         }
         .searchable(text: $searchText)

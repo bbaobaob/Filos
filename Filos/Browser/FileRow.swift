@@ -108,13 +108,13 @@ struct FileRow: View {
                 }
             }
             
-            if isText() {
+            //if isText() {
                 Button {
                     showTextSheet.toggle()
                 } label: {
                     Label("Text Viewer", systemImage: "doc.plaintext")
                 }
-            }
+            //}
             
             if let index = favList.firstIndex(where: { $0.path == file.url.path }) {
                 Button {
@@ -176,7 +176,7 @@ struct FileRow: View {
             FilePlistSheet(name: file.name, path: file.url.path)
         }
         .sheet(isPresented: $showTextSheet) {
-            FileTextSheet(name: file.name, path: file.url.path)
+            TextViewer(file.url)
         }
         .quickLookPreview($previewURL)
     }

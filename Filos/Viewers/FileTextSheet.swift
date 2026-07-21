@@ -1,6 +1,6 @@
 //
-//  FileTextSheet.swift
-//  AccessiblePlus
+//  TextViewer.swift
+//  Filos
 //
 //  Created by lunginspector on 5/20/26.
 //
@@ -8,13 +8,17 @@
 import SwiftUI
 import PartyUI
 
-struct FileTextSheet: View {
-    var name: String
-    var path: String
+struct TextViewer: View {
+    var fileURL: URL
     @State private var fileText: String = ""
     @State private var editText: String = ""
     @State private var isEditing = false
     @Environment(\.dismiss) var dismiss
+    @EnvironmentObject var mgr: FilosManager
+    
+    init(_ fileURL: URL) {
+        self.fileURL = fileURL
+    }
     
     var body: some View {
         NavigationStack {
@@ -31,7 +35,7 @@ struct FileTextSheet: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .navigationTitle(name)
+            .navigationTitle(fileURL.deletingPathExtension().lastPathComponent)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if isEditing {
@@ -47,10 +51,10 @@ struct FileTextSheet: View {
                     
                     ToolbarItem(placement: .topBarTrailing) {
                         Button(role: .adaptiveConfirm) {
-                            let res = writeTextIntoFile(URL(fileURLWithPath: path), string: editText)
+                            let res = writeTextIntoFile(fileURL, string: editText)
                             if res {
                                 isEditing = false
-                                fileText = getTextFromFile(URL(fileURLWithPath: path))
+                                fileText = getTextFromFile(fileURL)
                             }
                         } label: {
                             Label("Confirm", systemImage: "checkmark")
@@ -74,6 +78,14 @@ struct FileTextSheet: View {
                             } label: {
                                 Label("Copy", systemImage: "doc.on.doc")
                             }
+                            
+                            Button {
+                                if let url = makeTemp(fileURL) {
+                                    presentShareSheet(with: url)
+                                }
+                            } label: {
+                                Label("Share", systemImage: "square.and.arrow.up")
+                            }
                         } label: {
                             Label("Menu", systemImage: "ellipsis")
                         }
@@ -83,6 +95,7 @@ struct FileTextSheet: View {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
                             dismiss()
+                            mgr.refreshFiles.toggle()
                         } label: {
                             if #available(iOS 19.0, *) {
                                 Label("Close", systemImage: "xmark")
@@ -100,7 +113,7 @@ struct FileTextSheet: View {
                 }
             }
             .onAppear {
-                let text = getTextFromFile(URL(fileURLWithPath: path))
+                let text = getTextFromFile(fileURL)
                 fileText = text
                 editText = text
             }
@@ -126,5 +139,16 @@ struct FileTextSheet: View {
             print("[!] failed to write data: \(error)")
         }
         return false
+    }
+    
+    private func makeTemp(_ fileURL: URL) -> URL? {
+        do {
+            let tempURL = URL.temporaryDirectory.appendingPathComponent("\(fileURL.lastPathComponent)_\(UUID())")
+            try fm.copyItem(at: fileURL, to: tempURL)
+            return tempURL
+        } catch {
+            print("[!] failed to make temp: \(error)")
+        }
+        return nil
     }
 }
