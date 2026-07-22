@@ -11,54 +11,54 @@ import UniformTypeIdentifiers
 
 struct FileInfoProperties {
     var id = UUID()
-    var fileExists: Bool
-    var kind: String
-    var uttype: String
-    var size: Int
-    var created: String
-    var modified: String
-    var isSymlink: Bool
-    var posixPerms: String
-    var owner: String
-    var group: String
-    var readable: Bool
-    var writable: Bool
-    var executable: Bool
+    var fileExists = false
+    var kind = ""
+    var uttype = ""
+    var size = 0
+    var created = ""
+    var modified = ""
+    var isSymlink = false
+    var posixPerms = ""
+    var owner = ""
+    var group = ""
+    var readable = false
+    var writable = false
+    var executable = false
 }
 
 struct FileInfoSheet: View {
     @Environment(\.dismiss) var dismiss
     
-    var file: FileItem
-    @State private var fileInfo: FileInfoProperties = FileInfoProperties(fileExists: false, kind: "", uttype: "", size: 0, created: "", modified: "", isSymlink: false, posixPerms: "", owner: "", group: "", readable: false, writable: false, executable: false)
+    var fileItem: FileItem
+    @State private var fileInfo = FileInfoProperties()
     
     var body: some View {
         NavigationStack {
             List {
                 Section {
                     LabeledContent("Name") {
-                        Text(file.name)
+                        Text(fileItem.name)
                     }
                     .contextMenu {
                         Button {
-                            UIPasteboard.general.string = file.name
+                            UIPasteboard.general.string = fileItem.name
                         } label: {
                             Label("Copy Name", systemImage: "character.cursor.ibeam")
                         }
                     }
                     LabeledContent("Path") {
-                        Text(file.url.path)
+                        Text(fileItem.url.path)
                     }
                     .contextMenu {
                         Button {
-                            UIPasteboard.general.string = file.url.path
+                            UIPasteboard.general.string = fileItem.url.path
                         } label: {
                             Label("Copy Path", systemImage: "character.cursor.ibeam")
                         }
                     }
-                    if file.type == .file {
+                    if fileItem.type == .file {
                         LabeledContent("Size") {
-                            Text("\(ByteCountFormatter.string(fromByteCount: Int64(file.size), countStyle: .file))")
+                            Text("\(ByteCountFormatter.string(fromByteCount: Int64(fileItem.size), countStyle: .file))")
                         }
                     }
                 }
@@ -110,7 +110,7 @@ struct FileInfoSheet: View {
                     HeaderLabel(text: "Permissions", icon: "shield")
                 }
             }
-            .navigationTitle(file.type == .file ? "File Info" : "Folder Info")
+            .navigationTitle(fileItem.type == .file ? "File Info" : "Folder Info")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -123,7 +123,7 @@ struct FileInfoSheet: View {
                 }
             }
             .onAppear {
-                fileInfo = getFileInfo(fileURL: file.url)
+                fileInfo = getFileInfo(fileItem.url)
             }
         }
     }

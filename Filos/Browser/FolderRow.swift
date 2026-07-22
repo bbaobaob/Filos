@@ -20,7 +20,7 @@ struct FolderRow: View {
     @State private var fileInfo: FileInfoProperties = FileInfoProperties(fileExists: false, kind: "", uttype: "", size: 0, created: "", modified: "", isSymlink: false, posixPerms: "", owner: "", group: "", readable: false, writable: false, executable: false)
     @State private var folderType: FolderType = .normal
     
-    @State private var showFileInfoSheet: Bool = false
+    @State private var showInfo = false
     
     var body: some View {
         HStack(spacing: isSolariumUI() ? 12 : 10) {
@@ -50,7 +50,7 @@ struct FolderRow: View {
             Spacer()
             
             Button {
-                showFileInfoSheet.toggle()
+                showInfo.toggle()
             } label: {
                 Image(systemName: "info.circle")
             }
@@ -59,7 +59,7 @@ struct FolderRow: View {
         }
         .contextMenu {
             Button {
-                showFileInfoSheet.toggle()
+                showInfo.toggle()
             } label: {
                 Label("Get Info", systemImage: "info.circle")
             }
@@ -107,7 +107,9 @@ struct FolderRow: View {
             Divider()
             
             Button {
-                presentShareSheet(with: file.url)
+                if let url = makeTemp(file.url) {
+                    presentShareSheet(with: url)
+                }
             } label: {
                 Label("Share", systemImage: "square.and.arrow.up")
             }
@@ -123,10 +125,10 @@ struct FolderRow: View {
         }
         .onAppear {
             folderType = getFolderType(url: file.url)
-            fileInfo = getFileInfo(fileURL: file.url)
+            fileInfo = getFileInfo(file.url)
         }
-        .sheet(isPresented: $showFileInfoSheet) {
-            FileInfoSheet(file: file)
+        .sheet(isPresented: $showInfo) {
+            FileInfoSheet(fileItem: file)
         }
         .quickLookPreview($previewURL)
     }

@@ -12,6 +12,7 @@ struct SettingsView: View {
     @EnvironmentObject var mgr: FilosManager
     @Environment(\.openURL) var openURL
     @Environment(\.dismiss) var dismiss
+    
     @AppStorage("sbxToken") var sbxToken = ""
     @AppStorage("consumeOnLaunch") var consumeOnLaunch = false
     

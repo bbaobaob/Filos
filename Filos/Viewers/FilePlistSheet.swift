@@ -8,12 +8,16 @@
 import SwiftUI
 import PartyUI
 
-struct FilePlistSheet: View {
-    var name: String
-    var path: String
-    @State private var fileDict: [String : Any] = [:]
-    @State private var hierarchy: Int = 0
+struct PlistViewer: View {
     @Environment(\.dismiss) var dismiss
+    
+    var fileURL: URL
+    @State private var fileDict: [String : Any] = [:]
+    @State private var hierarchy = 0
+    
+    init(_ fileURL: URL) {
+        self.fileURL = fileURL
+    }
     
     var body: some View {
         NavigationStack {
@@ -24,20 +28,30 @@ struct FilePlistSheet: View {
                     }
                 }
             }
-            .navigationTitle(name)
+            .navigationTitle(fileURL.deletingPathExtension().lastPathComponent)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        if let url = makeTemp(fileURL) {
+                            presentShareSheet(with: url)
+                        }
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                            .labelStyle(.iconOnly)
+                    }
+                }
+                
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: {
+                    Button {
                         dismiss()
-                    }) {
+                    } label: {
                         CloseSheetLabel()
                     }
-                    .contentShape(.rect)
                 }
             }
             .onAppear {
-                fileDict = getFileDict(path: path)
+                fileDict = getFileDict(fileURL)
             }
         }
     }
@@ -47,11 +61,10 @@ struct KeyRow: View {
     let key: String
     let value: Any?
     let hierarchy: Int
-    @State private var editableText: String = ""
     
     @State private var nestedDict: [String: Any] = [:]
-    @State private var showNestedDict: Bool = false
-    @State private var showData: Bool = false
+    @State private var showNestedDict = false
+    @State private var showData = false
     
     var body: some View {
         if type == "Dictionary" || type == "Array" {

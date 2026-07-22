@@ -64,7 +64,8 @@ struct LogView: View {
                             Label("Export Logs", systemImage: "square.and.arrow.up")
                         }
                     } label: {
-                        Image(systemName: "ellipsis")
+                        Label("Menu", systemImage: "ellipsis")
+                            .labelStyle(.iconOnly)
                     }
                 }
                 

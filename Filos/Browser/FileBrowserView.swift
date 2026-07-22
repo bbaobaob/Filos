@@ -21,7 +21,6 @@ enum FileType {
     }
 }
 
-// system - load from filesystem completely normally (just don't sort)
 enum FileSortMode: String, CaseIterable, Codable, Hashable {
     case system, name, date, type, size
     
@@ -52,16 +51,17 @@ struct FileBrowserView: View {
     
     @State var path: URL
     @Binding var navigationPath: NavigationPath
+    
     @State private var dirFiles: [FileItem] = []
     @State private var unfilteredFiles: [FileItem] = []
-    @State private var showFavoritesSheet: Bool = false
-    @State private var showLogsSheet = false
-    @State private var showSettings = false
-    @State private var showFileImporter: Bool = false
     @State private var searchText = ""
-    
     @AppStorage("chosenSort") var chosenSort: FileSortMode = .system
     @AppStorage("filesAscend") var filesAscend: Bool = true
+    
+    @State private var showFavs = false
+    @State private var showLogs = false
+    @State private var showSettings = false
+    @State private var showFileImporter = false
     
     var body: some View {
         List {
@@ -76,6 +76,7 @@ struct FileBrowserView: View {
             }
         }
         .navigationTitle(path.lastPathComponent)
+        .searchable(text: $searchText)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -113,19 +114,53 @@ struct FileBrowserView: View {
                 Menu {
                     Menu {
                         Button {
-                            createFile()
+                            Alertinator.shared.prompt(title: "Enter both the name and the extension you'd like to use to create this file.", placeholder: "new.txt", completion: { name in
+                                let name = name ?? ""
+                                if !name.isEmpty {
+                                    do {
+                                        let fileURL = path.appendingPathComponent(name)
+                                        try Data().write(to: fileURL)
+                                        mgr.refreshFiles.toggle()
+                                    } catch {
+                                        print("(fm) failed to create file: \(error)")
+                                        Alertinator.shared.alert(title: "Failed to create file!", body: "\(error)")
+                                    }
+                                }
+                            })
                         } label: {
                             Label("File", systemImage: "doc")
                         }
                         
                         Button {
-                            createFolder()
+                            Alertinator.shared.prompt(title: "Enter a name for your new folder.", placeholder: "", completion: { name in
+                                let name = name ?? ""
+                                if !name.isEmpty {
+                                    do {
+                                        try fm.createDirectoryIfNeeded(at: path.appendingPathComponent(name))
+                                        mgr.refreshFiles.toggle()
+                                    } catch {
+                                        print("(fm) failed to create folder: \(error)")
+                                        Alertinator.shared.alert(title: "Failed to create directory!", body: "\(error)")
+                                    }
+                                }
+                            })
                         } label: {
                             Label("Folder", systemImage: "folder")
                         }
                         
                         Button {
-                            createSymlink()
+                            Alertinator.shared.prompt(title: "Enter the path you'd like your new symlink to point to.", placeholder: "/path/to/dir", completion: { symPath in
+                                let symPath = symPath ?? ""
+                                if !symPath.isEmpty {
+                                    do {
+                                        try fm.createSymbolicLink(atPath: path.appendingPathComponent(URL(fileURLWithPath: symPath).lastPathComponent).path, withDestinationPath: symPath)
+                                        mgr.refreshFiles.toggle()
+                                    } catch {
+                                        print("(fm) failed to create symlink: \(error)")
+                                        Alertinator.shared.alert(title: "Failed to create symlink!", body: "\(error)")
+                                    }
+                                }
+                            })
                         } label: {
                             Label("Symlink", systemImage: "arrow.up.right.circle")
                         }
@@ -154,7 +189,7 @@ struct FileBrowserView: View {
                     }
                     
                     Button {
-                        showFavoritesSheet.toggle()
+                        showFavs.toggle()
                     } label: {
                         Label("Favorites", systemImage: "star")
                     }
@@ -162,7 +197,7 @@ struct FileBrowserView: View {
                     Divider()
                     
                     Button {
-                        showLogsSheet.toggle()
+                        showLogs.toggle()
                     } label: {
                         Label("Logs", systemImage: "terminal")
                     }
@@ -178,11 +213,10 @@ struct FileBrowserView: View {
                 .labelStyle(.iconOnly)
             }
         }
-        .searchable(text: $searchText)
-        .sheet(isPresented: $showFavoritesSheet) {
+        .sheet(isPresented: $showFavs) {
             FavoritesSheet(navPath: $navigationPath)
         }
-        .sheet(isPresented: $showLogsSheet) {
+        .sheet(isPresented: $showLogs) {
             LogView()
         }
         .sheet(isPresented: $showSettings) {
@@ -190,6 +224,9 @@ struct FileBrowserView: View {
         }
         .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item]) { result in
             handleImport(result)
+        }
+        .refreshable {
+            mgr.refreshFiles.toggle()
         }
         .onAppear {
             loadFilesFromPath()
@@ -209,81 +246,6 @@ struct FileBrowserView: View {
         }
         .onChange(of: mgr.refreshFiles) { _ in
             loadFilesFromPath()
-        }
-        .refreshable {
-            mgr.refreshFiles.toggle()
-        }
-    }
-    
-    private func createFile() {
-        Alertinator.shared.prompt(title: "Enter both the name and the extension you'd like to use to create this file.", placeholder: "new.txt", completion: { name in
-            let name = name ?? ""
-            if !name.isEmpty {
-                do {
-                    let fileURL = path.appendingPathComponent(name)
-                    try Data().write(to: fileURL)
-                    mgr.refreshFiles.toggle()
-                } catch {
-                    print("(fm) failed to create file: \(error)")
-                    Alertinator.shared.alert(title: "Failed to create file!", body: "\(error)")
-                }
-            }
-        })
-    }
-    
-    private func createFolder() {
-        Alertinator.shared.prompt(title: "Enter a name for your new folder.", placeholder: "", completion: { name in
-            let name = name ?? ""
-            if !name.isEmpty {
-                do {
-                    try fm.createDirectoryIfNeeded(at: path.appendingPathComponent(name))
-                    mgr.refreshFiles.toggle()
-                } catch {
-                    print("(fm) failed to create folder: \(error)")
-                    Alertinator.shared.alert(title: "Failed to create directory!", body: "\(error)")
-                }
-            }
-        })
-    }
-    
-    private func createSymlink() {
-        Alertinator.shared.prompt(title: "Enter the path you'd like your new symlink to point to.", placeholder: "/path/to/dir", completion: { symPath in
-            let symPath = symPath ?? ""
-            if !symPath.isEmpty {
-                do {
-                    try fm.createSymbolicLink(atPath: path.appendingPathComponent(URL(fileURLWithPath: symPath).lastPathComponent).path, withDestinationPath: symPath)
-                    mgr.refreshFiles.toggle()
-                } catch {
-                    print("(fm) failed to create symlink: \(error)")
-                    Alertinator.shared.alert(title: "Failed to create symlink!", body: "\(error)")
-                }
-            }
-        })
-    }
-    
-    private func handleImport(_ result: Result<URL, Error>) {
-        switch result {
-        case .success(let fileURL):
-            do {
-                guard fileURL.startAccessingSecurityScopedResource() else {
-                    throw "failed to access file!"
-                }
-                defer { fileURL.stopAccessingSecurityScopedResource() }
-                
-                let data = try Data(contentsOf: fileURL)
-                
-                let newURL = path.appendingPathComponent(fileURL.lastPathComponent)
-                try? fm.removeItem(at: newURL)
-                
-                try data.write(to: newURL)
-                mgr.refreshFiles.toggle()
-            } catch {
-                print("(fm) failed to import file: \(error)")
-                Alertinator.shared.alert(title: "Failed to import file!", body: "\(error)")
-            }
-        case .failure(let error):
-            print("(fm) failed to import file: \(error)")
-            Alertinator.shared.alert(title: "Failed to import file!", body: "\(error)")
         }
     }
     
@@ -333,5 +295,32 @@ struct FileBrowserView: View {
         }
         
         return sortedFiles
+    }
+    
+    // MARK: handle import
+    private func handleImport(_ result: Result<URL, Error>) {
+        switch result {
+        case .success(let fileURL):
+            do {
+                guard fileURL.startAccessingSecurityScopedResource() else {
+                    throw "failed to access file!"
+                }
+                defer { fileURL.stopAccessingSecurityScopedResource() }
+                
+                let data = try Data(contentsOf: fileURL)
+                
+                let newURL = path.appendingPathComponent(fileURL.lastPathComponent)
+                try? fm.removeItem(at: newURL)
+                
+                try data.write(to: newURL)
+                mgr.refreshFiles.toggle()
+            } catch {
+                print("(fm) failed to import file: \(error)")
+                Alertinator.shared.alert(title: "Failed to import file!", body: "\(error)")
+            }
+        case .failure(let error):
+            print("(fm) failed to import file: \(error)")
+            Alertinator.shared.alert(title: "Failed to import file!", body: "\(error)")
+        }
     }
 }

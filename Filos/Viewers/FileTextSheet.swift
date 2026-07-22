@@ -9,12 +9,13 @@ import SwiftUI
 import PartyUI
 
 struct TextViewer: View {
-    var fileURL: URL
-    @State private var fileText: String = ""
-    @State private var editText: String = ""
-    @State private var isEditing = false
-    @Environment(\.dismiss) var dismiss
     @EnvironmentObject var mgr: FilosManager
+    @Environment(\.dismiss) var dismiss
+    
+    var fileURL: URL
+    @State private var fileText = ""
+    @State private var editText = ""
+    @State private var isEditing = false
     
     init(_ fileURL: URL) {
         self.fileURL = fileURL
@@ -45,8 +46,8 @@ struct TextViewer: View {
                             editText = fileText
                         } label: {
                             Label("Cancel", systemImage: "xmark")
+                                .labelStyle(.iconOnly)
                         }
-                        .labelStyle(.iconOnly)
                     }
                     
                     ToolbarItem(placement: .topBarTrailing) {
@@ -54,12 +55,12 @@ struct TextViewer: View {
                             let res = writeTextIntoFile(fileURL, string: editText)
                             if res {
                                 isEditing = false
-                                fileText = getTextFromFile(fileURL)
+                                fileText = getFileText(fileURL)
                             }
                         } label: {
                             Label("Confirm", systemImage: "checkmark")
+                                .labelStyle(.iconOnly)
                         }
-                        .labelStyle(.iconOnly)
                     }
                 } else {
                     ToolbarItem(placement: .topBarLeading) {
@@ -88,8 +89,8 @@ struct TextViewer: View {
                             }
                         } label: {
                             Label("Menu", systemImage: "ellipsis")
+                                .labelStyle(.iconOnly)
                         }
-                        .labelStyle(.iconOnly)
                     }
                     
                     ToolbarItem(placement: .topBarTrailing) {
@@ -97,37 +98,22 @@ struct TextViewer: View {
                             dismiss()
                             mgr.refreshFiles.toggle()
                         } label: {
-                            if #available(iOS 19.0, *) {
-                                Label("Close", systemImage: "xmark")
-                            } else {
-                                Text("Close")
-                            }
+                            CloseSheetLabel()
                         }
-                        .labelStyle(.iconOnly)
                     }
                 }
+            }
+            .onAppear {
+                let text = getFileText(fileURL)
+                fileText = text
+                editText = text
             }
             .onChange(of: isEditing) { editing in
                 if editing && fileText.isEmpty {
                     editText = "add text here..."
                 }
             }
-            .onAppear {
-                let text = getTextFromFile(fileURL)
-                fileText = text
-                editText = text
-            }
         }
-    }
-    
-    private func getTextFromFile(_ url: URL) -> String {
-        do {
-            let string = try String(contentsOf: url, encoding: .utf8)
-            return string
-        } catch {
-            print("[!] failed to get text from file: \(error)")
-        }
-        return ""
     }
     
     private func writeTextIntoFile(_ url: URL, string: String) -> Bool {
@@ -139,16 +125,5 @@ struct TextViewer: View {
             print("[!] failed to write data: \(error)")
         }
         return false
-    }
-    
-    private func makeTemp(_ fileURL: URL) -> URL? {
-        do {
-            let tempURL = URL.temporaryDirectory.appendingPathComponent("\(fileURL.lastPathComponent)_\(UUID())")
-            try fm.copyItem(at: fileURL, to: tempURL)
-            return tempURL
-        } catch {
-            print("[!] failed to make temp: \(error)")
-        }
-        return nil
     }
 }

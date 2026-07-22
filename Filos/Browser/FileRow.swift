@@ -19,16 +19,16 @@ struct FileRow: View {
     @State private var previewURL: URL?
     @State private var fileInfo: FileInfoProperties = FileInfoProperties(fileExists: false, kind: "", uttype: "", size: 0, created: "", modified: "", isSymlink: false, posixPerms: "", owner: "", group: "", readable: false, writable: false, executable: false)
     
-    @State private var showFileInfoSheet: Bool = false
-    @State private var showFilePlistSheet: Bool = false
-    @State private var showTextSheet: Bool = false
+    @State private var showInfo = false
+    @State private var showPlistViewer = false
+    @State private var showTextViewer = false
     
     var body: some View {
         Button {
-            if isPlist() {
-                showFilePlistSheet.toggle()
-            } else if isText() {
-                showTextSheet.toggle()
+            if isText() {
+                showTextViewer.toggle()
+            } else if isPlist() {
+                showPlistViewer.toggle()
             } else {
                 previewURL = file.url
             }
@@ -56,7 +56,7 @@ struct FileRow: View {
                     .foregroundStyle(.secondary)
                 
                 Button {
-                    showFileInfoSheet.toggle()
+                    showInfo.toggle()
                 } label: {
                     Image(systemName: "info.circle")
                 }
@@ -67,7 +67,7 @@ struct FileRow: View {
         .foregroundStyle(Color(.label))
         .contextMenu {
             Button {
-                showFileInfoSheet.toggle()
+                showInfo.toggle()
             } label: {
                 Label("Get Info", systemImage: "info.circle")
             }
@@ -100,21 +100,21 @@ struct FileRow: View {
                 }
             }
             
-            if fileInfo.uttype == "com.apple.property-list" {
+            if isPlist() {
                 Button {
-                    showFilePlistSheet.toggle()
+                    showInfo.toggle()
                 } label: {
                     Label("Plist Viewer", systemImage: "text.document")
                 }
             }
             
-            //if isText() {
+            if isText() || isPlist() {
                 Button {
-                    showTextSheet.toggle()
+                    showInfo.toggle()
                 } label: {
                     Label("Text Viewer", systemImage: "doc.plaintext")
                 }
-            //}
+            }
             
             if let index = favList.firstIndex(where: { $0.path == file.url.path }) {
                 Button {
@@ -147,7 +147,9 @@ struct FileRow: View {
             }
             
             Button {
-                presentShareSheet(with: file.url)
+                if let url = makeTemp(file.url) {
+                    presentShareSheet(with: url)
+                }
             } label: {
                 Label("Share", systemImage: "square.and.arrow.up")
             }
@@ -167,15 +169,15 @@ struct FileRow: View {
             }
         }
         .onAppear {
-            fileInfo = getFileInfo(fileURL: file.url)
+            fileInfo = getFileInfo(file.url)
         }
-        .sheet(isPresented: $showFileInfoSheet) {
-            FileInfoSheet(file: file)
+        .sheet(isPresented: $showInfo) {
+            FileInfoSheet(fileItem: file)
         }
-        .sheet(isPresented: $showFilePlistSheet) {
-            FilePlistSheet(name: file.name, path: file.url.path)
+        .sheet(isPresented: $showPlistViewer) {
+            PlistViewer(file.url)
         }
-        .sheet(isPresented: $showTextSheet) {
+        .sheet(isPresented: $showTextViewer) {
             TextViewer(file.url)
         }
         .quickLookPreview($previewURL)

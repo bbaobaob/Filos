@@ -22,8 +22,8 @@ struct FavoritesSheet: View {
         FavoriteItem(label: "Filos Documents", path: URL.documentsDirectory.path)
     ]
     
-    @State private var label: String = ""
-    @State private var path: String = ""
+    @State private var label = ""
+    @State private var path = ""
     
     var body: some View {
         NavigationStack {
@@ -86,7 +86,8 @@ struct FavoritesSheet: View {
                             FavoriteItem(label: "Filos Documents", path: URL.documentsDirectory.path)
                         ]
                     } label: {
-                        Image(systemName: "trash")
+                        Label("Reset", systemImage: "trash")
+                            .labelStyle(.iconOnly)
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -95,7 +96,6 @@ struct FavoritesSheet: View {
                     } label: {
                         CloseSheetLabel()
                     }
-                    .contentShape(.rect)
                 }
             }
         }

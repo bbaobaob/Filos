@@ -35,6 +35,22 @@ extension FileManager {
     }
 }
 
+func makeTemp(_ fileURL: URL) -> URL? {
+    do {
+        guard fileURL.startAccessingSecurityScopedResource() else {
+            throw "failed to access file!"
+        }
+        defer { fileURL.stopAccessingSecurityScopedResource() }
+        
+        let tempURL = URL.temporaryDirectory.appendingPathComponent("\(fileURL.lastPathComponent)_\(UUID())")
+        try fm.copyItem(at: fileURL, to: tempURL)
+        return tempURL
+    } catch {
+        print("[!] failed to make temp: \(error)")
+    }
+    return nil
+}
+
 // MARK: sbx stuff
 func sbxConsume(token: String) -> Int64? {
     typealias sbxConsumeFunc = @convention(c) (UnsafePointer<CChar>?) -> Int64
@@ -60,7 +76,7 @@ func generateNavPath(path: String) -> String {
         return ""
     }
     
-    let fileDetails = getFileInfo(fileURL: URL(fileURLWithPath: path))
+    let fileDetails = getFileInfo(URL(fileURLWithPath: path))
     
     if fileDetails.kind == "directory" || fileDetails.isSymlink {
         return path
@@ -75,27 +91,22 @@ func generateNavPath(path: String) -> String {
 }
 
 // MARK: get file info
-func getFileInfo(fileURL: URL) -> FileInfoProperties {
+func getFileInfo(_ fileURL: URL) -> FileInfoProperties {
     let fm = FileManager.default
-    var info: FileInfoProperties = FileInfoProperties(fileExists: false, kind: "", uttype: "", size: 0, created: "", modified: "", isSymlink: false, posixPerms: "", owner: "", group: "", readable: false, writable: false, executable: false)
+    var info: FileInfoProperties = FileInfoProperties()
     
-    // check if file exists & get type
     var isdir = ObjCBool(false)
     let exists = fm.fileExists(atPath: fileURL.path, isDirectory: &isdir)
-    
     if exists {
         info.fileExists = exists
         info.kind = isdir.boolValue ? "directory" : "file"
     }
     
-    // get particular file info
-    let keys: Set<URLResourceKey> = [.contentTypeKey, .fileSizeKey, .creationDateKey, .contentModificationDateKey, .isSymbolicLinkKey]
-    
-    // it's date formatting time
     let formatter = DateFormatter()
     formatter.dateFormat = "MM-dd-yyyy h:mm a"
     formatter.locale = Locale(identifier: "en_US_POSIX")
     
+    let keys: Set<URLResourceKey> = [.contentTypeKey, .fileSizeKey, .creationDateKey, .contentModificationDateKey, .isSymbolicLinkKey]
     if let values = try? fileURL.resourceValues(forKeys: keys) {
         if let type = values.contentType {
             info.uttype = type.identifier
@@ -114,7 +125,6 @@ func getFileInfo(fileURL: URL) -> FileInfoProperties {
         }
     }
     
-    // now get permissions
     if let attrs = try? fm.attributesOfItem(atPath: fileURL.path) {
         if let perms = attrs[.posixPermissions] as? NSNumber {
             info.posixPerms = String(format: "%04o", perms.intValue)
@@ -135,9 +145,7 @@ func getFileInfo(fileURL: URL) -> FileInfoProperties {
 }
 
 // MARK: get dict from file
-func getFileDict(path: String) -> [String : Any] {
-    let url = URL(fileURLWithPath: path)
-    
+func getFileDict(_ url: URL) -> [String : Any] {
     if let data = try? Data(contentsOf: url),
        let dict = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String : Any] {
         return dict
@@ -147,9 +155,9 @@ func getFileDict(path: String) -> [String : Any] {
 }
 
 // MARK: get text from file
-func getFileText(path: String) -> String {
+func getFileText(_ url: URL) -> String {
     do {
-        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        let data = try Data(contentsOf: url)
         
         if let text = String(data: data, encoding: .utf8) {
             return text
