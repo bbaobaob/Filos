@@ -172,7 +172,7 @@ struct FileRow: View {
             fileInfo = getFileInfo(file.url)
         }
         .sheet(isPresented: $showInfo) {
-            FileInfoSheet(fileItem: file)
+            InfoViewer(fileItem: file)
         }
         .sheet(isPresented: $showPlistViewer) {
             PlistViewer(file.url)

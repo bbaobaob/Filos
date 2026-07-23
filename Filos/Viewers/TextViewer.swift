@@ -35,6 +35,7 @@ struct TextViewer: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(minHeight: 100, alignment: .topLeading)
             }
             .navigationTitle(fileURL.deletingPathExtension().lastPathComponent)
             .navigationBarTitleDisplayMode(.inline)
@@ -108,11 +109,13 @@ struct TextViewer: View {
                 fileText = text
                 editText = text
             }
+            /*
             .onChange(of: isEditing) { editing in
                 if editing && fileText.isEmpty {
                     editText = "add text here..."
                 }
             }
+             */
         }
     }
     

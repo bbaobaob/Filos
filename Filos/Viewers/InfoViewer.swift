@@ -26,7 +26,7 @@ struct FileInfoProperties {
     var executable = false
 }
 
-struct FileInfoSheet: View {
+struct InfoViewer: View {
     @Environment(\.dismiss) var dismiss
     
     var fileItem: FileItem

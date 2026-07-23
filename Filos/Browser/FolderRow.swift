@@ -128,7 +128,7 @@ struct FolderRow: View {
             fileInfo = getFileInfo(file.url)
         }
         .sheet(isPresented: $showInfo) {
-            FileInfoSheet(fileItem: file)
+            InfoViewer(fileItem: file)
         }
         .quickLookPreview($previewURL)
     }

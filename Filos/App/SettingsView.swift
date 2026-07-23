@@ -21,7 +21,7 @@ struct SettingsView: View {
             List {
                 Section {
                     VStack(alignment: .leading, spacing: 10) {
-                        AppInfoCell(build: "Beta 1")
+                        AppInfoCell(build: "Beta 2")
                         HStack {
                             Button {
                                 openURL(URL(string: "https://jailbreak.party/discord")!)
