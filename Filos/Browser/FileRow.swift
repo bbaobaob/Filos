@@ -25,10 +25,10 @@ struct FileRow: View {
     
     var body: some View {
         Button {
-            if isText() {
-                showTextViewer.toggle()
-            } else if isPlist() {
+            if isPlist() {
                 showPlistViewer.toggle()
+            } else if isText() {
+                showTextViewer.toggle()
             } else {
                 previewURL = file.url
             }
@@ -102,7 +102,7 @@ struct FileRow: View {
             
             if isPlist() {
                 Button {
-                    showInfo.toggle()
+                    showPlistViewer.toggle()
                 } label: {
                     Label("Plist Viewer", systemImage: "text.document")
                 }
@@ -110,7 +110,7 @@ struct FileRow: View {
             
             if isText() || isPlist() {
                 Button {
-                    showInfo.toggle()
+                    showTextViewer.toggle()
                 } label: {
                     Label("Text Viewer", systemImage: "doc.plaintext")
                 }

@@ -21,13 +21,13 @@ extension FileManager {
     }
 }
 
-func getFileDict(_ url: URL) -> [String : Any] {
+func getFileDict(_ url: URL) -> [String : Any]? {
     if let data = try? Data(contentsOf: url),
        let dict = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String : Any] {
         return dict
     }
     
-    return [:]
+    return nil
 }
 
 func getFileText(_ url: URL) -> String {
