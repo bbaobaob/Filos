@@ -10,6 +10,7 @@ import PartyUI
 
 struct ModifyItemPage: View {
     @EnvironmentObject private var pmgr: PlistManager
+    @Environment(\.dismiss) var dismiss
     
     @State var item: PlistItem
     @State private var isEditing = false
@@ -24,9 +25,12 @@ struct ModifyItemPage: View {
                 }
                 Picker("Type", selection: $item.type) {
                     ForEach(PlistItemType.allCases, id: \.self) { type in
-                        Text(type.label).id(type)
+                        if type != .unknown {
+                            Text(type.label).id(type)
+                        }
                     }
                 }
+                .disabled(!isEditing)
             } header: {
                 HeaderLabel(text: "Identity", icon: "creditcard")
             }
@@ -34,62 +38,87 @@ struct ModifyItemPage: View {
             Section {
                 switch item.type {
                 case .dict, .array:
-                    ForEach(item.dictVal) { item in
-                        ItemRow(item: item, hierarchy: 0).environmentObject(pmgr)
+                    Button("Add Item") {
+                        item.dictVal[0] = PlistItem(key: "New Item", value: "")
+                    }
+                    .disabled(!isEditing)
+                    ForEach(item.dictVal.sorted(by: { $0.key < $1.key })) { nestItem in
+                        ItemRow(item: nestItem, hierarchy: 0).environmentObject(pmgr)
+                            .disabled(isEditing && nestItem.key == "New Item")
                             .swipeActions {
-                                Button {
-                                    pmgr.plistArray.removeAll { $0.id == item.id }
-                                } label: {
-                                    Image(systemName: "trash")
+                                if isEditing {
+                                    Button(role: .destructive) {
+                                        item.dictVal.removeAll { $0.id == nestItem.id }
+                                    } label: {
+                                        Image(systemName: "trash")
+                                    }
                                 }
                             }
                     }
-                    Button("Add Key") {
-                        item.dictVal[0] = PlistItem(key: "New Item", value: "")
-                    }
                 case .data:
                     TextEditor(text: $item.stringVal)
-                        .frame(maxHeight: .infinity)
+                        .frame(height: 400)
+                        .disabled(!isEditing)
                 default:
                     TextField(item.type.label, text: $item.stringVal)
+                        .disabled(!isEditing)
                 }
             } header: {
                 if item.type == .dict || item.type == .array {
-                    Text("\(item.dictVal.count) items")
+                    HeaderLabel(text: "Value (\(item.dictVal.count) items)", icon: "character.cursor.ibeam")
+                } else {
+                    HeaderLabel(text: "Value", icon: "character.cursor.ibeam")
+                }
+            }
+            
+            if isEditing {
+                Button("Delete Item", role: .destructive) {
+                    let _ = pmgr.writePlistItems(delItem: item)
+                    dismiss()
                 }
             }
         }
         .navigationTitle("\(item.key)")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(isEditing)
+        .onAppear {
+            item = pmgr.plistArray.first(where: { $0.id == item.id }) ?? item
+        }
         .toolbar {
+            if !isEditing {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        isEditing = true
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
+                            .labelStyle(.iconOnly)
+                    }
+                }
+            }
+            
             if isEditing {
-                Button {
-                    item = pmgr.plistArray.first(where: { $0.id == item.id }) ?? item
-                    isEditing = false
-                } label: {
-                    Label("Cancel", systemImage: "xmark")
-                        .labelStyle(.iconOnly)
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        item = pmgr.plistArray.first(where: { $0.id == item.id }) ?? item
+                        isEditing = false
+                    } label: {
+                        Label("Cancel", systemImage: "xmark")
+                            .labelStyle(.iconOnly)
+                    }
                 }
                 
-                Button(role: .adaptiveConfirm) {
-                    if let index = pmgr.plistArray.firstIndex(where: { $0.id == item.id }) {
-                        pmgr.plistArray[index] = item
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .adaptiveConfirm) {
+                        let res = pmgr.writePlistItems(newItem: item)
+                        if res {
+                            Haptic.shared.play(.soft)
+                        } else {
+                            Alertinator.shared.alert(title: "Failed to write plist items!", body: "Check error logs for more detailed information.")
+                        }
+                        isEditing = false
+                    } label: {
+                        Label("Apply", systemImage: "checkmark")
                     }
-                    let res = pmgr.writePlistItems()
-                    if res {
-                        Haptic.shared.play(.soft)
-                    } else {
-                        Alertinator.shared.alert(title: "Failed to write plist items!", body: "Check error logs for more detailed information.")
-                    }
-                    isEditing = false
-                } label: {
-                    Label("Apply", systemImage: "checkmark")
-                }
-            } else {
-                Button {
-                    isEditing = true
-                } label: {
-                    Label("Edit", systemImage: "pencil")
-                        .labelStyle(.iconOnly)
                 }
             }
         }

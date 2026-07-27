@@ -53,7 +53,21 @@ final class PlistManager: ObservableObject {
         return false
     }
     
-    func writePlistItems() -> Bool {
+    func writePlistItems(newItem: PlistItem? = nil, delItem: PlistItem? = nil) -> Bool {
+        if let newItem {
+            let res = replacePlistItem(items: &plistArray, newItem: newItem)
+            if !res {
+                print("[!] failed to write plist: couldn't find \(newItem.key) in dictionary.")
+            }
+        }
+        
+        if let delItem {
+            let res = deletePlistItem(items: &plistArray, target: delItem)
+            if !res {
+                print("[!] failed to write plist: couldn't find \(delItem.key) in dictionary.")
+            }
+        }
+        
         var dictToWrite: [String : Any] = [:]
         
         for item in plistArray {
@@ -69,10 +83,38 @@ final class PlistManager: ObservableObject {
         }
         return false
     }
+    
+    func replacePlistItem(items: inout [PlistItem], newItem: PlistItem) -> Bool {
+        for item in items.indices {
+            if items[item].id == newItem.id {
+                items[item] = newItem
+                return true
+            }
+            
+            if replacePlistItem(items: &items[item].dictVal, newItem: newItem) {
+                return true
+            }
+        }
+        return false
+    }
+    
+    func deletePlistItem(items: inout [PlistItem], target: PlistItem) -> Bool {
+        for item in items.indices {
+            if items[item].id == target.id {
+                items.removeAll() { $0.id == target.id }
+                return true
+            }
+            
+            if deletePlistItem(items: &items[item].dictVal, target: target) {
+                return true
+            }
+        }
+        return false
+    }
 }
 
 struct PlistItem: Identifiable {
-    var id: String { key }
+    var id = UUID()
     var key: String
     var rawVal: Any?
     var type: PlistItemType = .unknown
@@ -94,7 +136,7 @@ struct PlistItem: Identifiable {
         case let v as Bool: self.boolVal = v
         case let v as Data: self.stringVal = v.base64EncodedString()
         case let v as [String : Any]:
-            self.dictVal = v.sorted(by: { $0.key < $1.key }).map {
+            self.dictVal = v.map {
                 PlistItem(key: $0.key, value: $0.value)
             }
             self.stringVal = v.description
@@ -128,7 +170,7 @@ struct PlistItem: Identifiable {
         case .int: return Int(stringVal) ?? 0
         case .double: return Double(stringVal) ?? 0
         case .bool: return boolVal
-        case .data: return stringVal
+        case .data: return Data(stringVal.utf8)
         case .dict:
             var rawDict = [String : Any]()
             for item in dictVal {

@@ -10,26 +10,50 @@ import PartyUI
 
 struct PlistViewer: View {
     @StateObject private var pmgr = PlistManager.shared
+    @Environment(\.dismiss) var dismiss
     var fileURL: URL
     
     init(_ fileURL: URL) {
         self.fileURL = fileURL
         pmgr.url = fileURL
-        let res = pmgr.loadPlistItems()
-        if !res {
-            Alertinator.shared.alert(title: "Failed to load plist!", body: "Check error logs for more detailed information.")
-        }
     }
     
     var body: some View {
         NavigationStack {
             List {
-                ForEach(pmgr.plistArray) { item in
+                ForEach(pmgr.plistArray.sorted(by: { $0.key < $1.key })) { item in
                     ItemRow(item: item, hierarchy: 0)
                         .environmentObject(pmgr)
                 }
             }
-            .navigationTitle(fileURL.deletingLastPathComponent().lastPathComponent)
+            .navigationTitle(fileURL.lastPathComponent)
+            .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                let res = pmgr.loadPlistItems()
+                if !res {
+                    Alertinator.shared.alert(title: "Failed to load plist!", body: "Check error logs for more detailed information.")
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        if let url = makeTemp(fileURL) {
+                            presentShareSheet(with: url)
+                        }
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                            .labelStyle(.iconOnly)
+                    }
+                }
+                
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        CloseSheetLabel()
+                    }
+                }
+            }
         }
     }
 }

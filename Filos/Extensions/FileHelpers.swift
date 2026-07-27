@@ -54,7 +54,10 @@ func makeTemp(_ fileURL: URL) -> URL? {
             }
         }
         
-        let tempURL = URL.temporaryDirectory.appendingPathComponent("\(fileURL.lastPathComponent)_\(UUID())")
+        let tempURL = URL.temporaryDirectory.appendingPathComponent("\(fileURL.lastPathComponent)")
+        if fm.fileExists(atPath: tempURL.path) {
+            try fm.removeItem(at: tempURL)
+        }
         try fm.copyItem(at: fileURL, to: tempURL)
         return tempURL
     } catch {

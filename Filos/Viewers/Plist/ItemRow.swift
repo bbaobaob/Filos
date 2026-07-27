@@ -40,7 +40,7 @@ struct ItemRow: View {
                             .font(.system(size: 10, design: .monospaced))
                             .listRowBackground(Color(uiColor: .hierarchyLevelColor(hierarchy + 1)))
                     } else {
-                        ForEach(item.dictVal) { item in
+                        ForEach(item.dictVal.sorted(by: { $0.key < $1.key })) { item in
                             ItemRow(item: item, hierarchy: hierarchy + 1).environmentObject(pmgr)
                         }
                     }
@@ -55,7 +55,6 @@ struct ItemRow: View {
             }
         }
         .contextMenu {
-            Text(item.type.label)
             NavigationLink(destination: ModifyItemPage(item: item).environmentObject(pmgr)) {
                 Label("Modify Value", systemImage: "pencil")
             }
