@@ -85,19 +85,8 @@ struct ModifyItemPage: View {
             item = pmgr.plistArray.first(where: { $0.id == item.id }) ?? item
         }
         .toolbar {
-            if !isEditing {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        isEditing = true
-                    } label: {
-                        Label("Edit", systemImage: "pencil")
-                            .labelStyle(.iconOnly)
-                    }
-                }
-            }
-            
-            if isEditing {
-                ToolbarItem(placement: .topBarLeading) {
+            ToolbarItem(placement: .topBarLeading) {
+                if isEditing {
                     Button {
                         item = pmgr.plistArray.first(where: { $0.id == item.id }) ?? item
                         isEditing = false
@@ -106,8 +95,10 @@ struct ModifyItemPage: View {
                             .labelStyle(.iconOnly)
                     }
                 }
-                
-                ToolbarItem(placement: .topBarTrailing) {
+            }
+            
+            ToolbarItem(placement: .topBarTrailing) {
+                if isEditing {
                     Button(role: .adaptiveConfirm) {
                         let res = pmgr.writePlistItems(newItem: item)
                         if res {
@@ -118,6 +109,13 @@ struct ModifyItemPage: View {
                         isEditing = false
                     } label: {
                         Label("Apply", systemImage: "checkmark")
+                    }
+                } else {
+                    Button {
+                        isEditing = true
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
+                            .labelStyle(.iconOnly)
                     }
                 }
             }

@@ -19,7 +19,7 @@ struct PlistViewer: View {
     }
     
     var body: some View {
-        NavigationStack {
+        NavigationView {
             List {
                 ForEach(pmgr.plistArray.sorted(by: { $0.key < $1.key })) { item in
                     ItemRow(item: item, hierarchy: 0)
@@ -50,11 +50,12 @@ struct PlistViewer: View {
                     Button {
                         dismiss()
                     } label: {
-                        CloseSheetLabel()
+                        ToolbarLabel("Close", icon: "xmark")
                     }
                 }
             }
         }
+        .navigationViewStyle(.stack)
     }
 }
 

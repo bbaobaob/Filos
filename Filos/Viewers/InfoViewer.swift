@@ -33,11 +33,14 @@ struct InfoViewer: View {
     @State private var fileInfo = FileInfoProperties()
     
     var body: some View {
-        NavigationStack {
+        NavigationView {
             List {
                 Section {
-                    LabeledContent("Name") {
+                    HStack {
+                        Text("Name")
+                        Spacer()
                         Text(fileItem.name)
+                            .foregroundStyle(.secondary)
                     }
                     .contextMenu {
                         Button {
@@ -46,8 +49,11 @@ struct InfoViewer: View {
                             Label("Copy Name", systemImage: "character.cursor.ibeam")
                         }
                     }
-                    LabeledContent("Path") {
+                    HStack {
+                        Text("Path")
+                        Spacer()
                         Text(fileItem.url.path)
+                            .foregroundStyle(.secondary)
                     }
                     .contextMenu {
                         Button {
@@ -57,15 +63,21 @@ struct InfoViewer: View {
                         }
                     }
                     if fileItem.type == .file {
-                        LabeledContent("Size") {
+                        HStack {
+                            Text("Size")
+                            Spacer()
                             Text("\(ByteCountFormatter.string(fromByteCount: Int64(fileItem.size), countStyle: .file))")
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
                 
                 Section {
-                    LabeledContent("UTType") {
+                    HStack {
+                        Text("UTType")
+                        Spacer()
                         Text(fileInfo.uttype)
+                            .foregroundStyle(.secondary)
                     }
                     .contextMenu {
                         Button {
@@ -74,37 +86,64 @@ struct InfoViewer: View {
                             Label("Copy UTType", systemImage: "doc")
                         }
                     }
-                    LabeledContent("Creation Date") {
+                    HStack {
+                        Text("Creation Date")
+                        Spacer()
                         Text(fileInfo.created)
+                            .foregroundStyle(.secondary)
                     }
-                    LabeledContent("Last Modified") {
+                    HStack {
+                        Text("Last Modified")
+                        Spacer()
                         Text(fileInfo.modified)
+                            .foregroundStyle(.secondary)
                     }
-                    LabeledContent("Symlink") {
+                    HStack {
+                        Text("Symlink")
+                        Spacer()
                         Image(systemName: fileInfo.isSymlink ? "checkmark" : "xmark")
+                            .foregroundStyle(.secondary)
                     }
                 } header: {
                     HeaderLabel(text: "File", icon: "doc")
                 }
                 
                 Section {
-                    LabeledContent("POSIX Permissions") {
+                    HStack {
+                        Text("POSIX Permissions")
+                        Spacer()
                         Text(fileInfo.posixPerms)
+                            .foregroundStyle(.secondary)
                     }
-                    LabeledContent("Owner") {
+                    HStack {
+                        Text("Owner")
+                        Spacer()
                         Text(fileInfo.owner)
+                            .foregroundStyle(.secondary)
                     }
-                    LabeledContent("Group") {
+                    HStack {
+                        Text("Group")
+                        Spacer()
                         Text(fileInfo.group)
+                            .foregroundStyle(.secondary)
                     }
-                    LabeledContent("Readable") {
+                    HStack {
+                        Text("Readable")
+                        Spacer()
                         Image(systemName: fileInfo.readable ? "checkmark" : "xmark")
+                            .foregroundStyle(.secondary)
                     }
-                    LabeledContent("Writable") {
+                    HStack {
+                        Text("Writable")
+                        Spacer()
                         Image(systemName: fileInfo.writable ? "checkmark" : "xmark")
+                            .foregroundStyle(.secondary)
                     }
-                    LabeledContent("Executable") {
+                    HStack {
+                        Text("Executable")
+                        Spacer()
                         Image(systemName: fileInfo.executable ? "checkmark" : "xmark")
+                            .foregroundStyle(.secondary)
                     }
                 } header: {
                     HeaderLabel(text: "Permissions", icon: "shield")
@@ -117,14 +156,14 @@ struct InfoViewer: View {
                     Button {
                         dismiss()
                     } label: {
-                        CloseSheetLabel()
+                        ToolbarLabel("Close", icon: "xmark")
                     }
-                    .contentShape(.rect)
                 }
             }
             .onAppear {
                 fileInfo = getFileInfo(fileItem.url)
             }
         }
+        .navigationViewStyle(.stack)
     }
 }

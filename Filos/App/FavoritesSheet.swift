@@ -16,7 +16,7 @@ struct FavoriteItem: Identifiable, Codable {
 
 struct FavoritesSheet: View {
     @Environment(\.dismiss) var dismiss
-    @Binding var navPath: NavigationPath
+    @EnvironmentObject private var mgr: FilosManager
     
     @AppStorage("favList") var favList: [FavoriteItem] = [
         FavoriteItem(label: "Filos Documents", path: URL.documentsDirectory.path)
@@ -26,7 +26,7 @@ struct FavoritesSheet: View {
     @State private var path = ""
     
     var body: some View {
-        NavigationStack {
+        NavigationView {
             List {
                 Section {
                     TextField("Label", text: $label)
@@ -45,7 +45,7 @@ struct FavoritesSheet: View {
                     ForEach(favList) { fav in
                         Button(action: {
                             let path = generateNavPath(path: fav.path)
-                            navPath.append(URL(fileURLWithPath: path))
+                            mgr.fmNavPath = URL(fileURLWithPath: path)
                             dismiss()
                         }) {
                             HStack {
@@ -59,7 +59,7 @@ struct FavoritesSheet: View {
                                 Spacer()
                                 
                                 Image(systemName: "chevron.right")
-                                    .fontWeight(.semibold)
+                                    .font(.body.weight(.semibold))
                                     .foregroundStyle(.tertiary)
                                     .imageScale(.small)
                             }
@@ -94,10 +94,11 @@ struct FavoritesSheet: View {
                     Button {
                         dismiss()
                     } label: {
-                        CloseSheetLabel()
+                        ToolbarLabel("Close", icon: "xmark")
                     }
                 }
             }
         }
+        .navigationViewStyle(.stack)
     }
 }

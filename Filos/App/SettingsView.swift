@@ -17,7 +17,7 @@ struct SettingsView: View {
     @AppStorage("consumeOnLaunch") var consumeOnLaunch = false
     
     var body: some View {
-        NavigationStack {
+        NavigationView {
             List {
                 Section {
                     VStack(alignment: .leading, spacing: 10) {
@@ -97,11 +97,12 @@ struct SettingsView: View {
                     Button {
                         dismiss()
                     } label: {
-                        CloseSheetLabel()
+                        ToolbarLabel("Close", icon: "xmark")
                     }
                 }
             }
         }
+        .navigationViewStyle(.stack)
     }
 }
 

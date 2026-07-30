@@ -13,7 +13,7 @@ struct LogView: View {
     @EnvironmentObject var mgr: FilosManager
 
     var body: some View {
-        NavigationStack {
+        NavigationView {
             GeometryReader { _ in
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -73,11 +73,12 @@ struct LogView: View {
                     Button {
                         dismiss()
                     } label: {
-                        CloseSheetLabel()
+                        ToolbarLabel("Close", icon: "xmark")
                     }
                 }
             }
         }
+        .navigationViewStyle(.stack)
     }
 }
 

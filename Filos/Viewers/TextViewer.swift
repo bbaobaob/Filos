@@ -22,7 +22,7 @@ struct TextViewer: View {
     }
     
     var body: some View {
-        NavigationStack {
+        NavigationView {
             ScrollView {
                 VStack(alignment: .leading) {
                     if isEditing {
@@ -40,8 +40,8 @@ struct TextViewer: View {
             .navigationTitle(fileURL.deletingPathExtension().lastPathComponent)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if isEditing {
-                    ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .topBarLeading) {
+                    if isEditing {
                         Button {
                             isEditing = false
                             editText = fileText
@@ -51,7 +51,37 @@ struct TextViewer: View {
                         }
                     }
                     
-                    ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        if !isEditing {
+                            Button {
+                                isEditing = true
+                            } label: {
+                                Label("Edit", systemImage: "pencil")
+                            }
+                        }
+                        
+                        Button {
+                            Haptic.shared.play(.soft)
+                            UIPasteboard.general.string = fileText
+                        } label: {
+                            Label("Copy", systemImage: "doc.on.doc")
+                        }
+                        
+                        Button {
+                            if let url = makeTemp(fileURL) {
+                                presentShareSheet(with: url)
+                            }
+                        } label: {
+                            Label("Share", systemImage: "square.and.arrow.up")
+                        }
+                    } label: {
+                        Label("Menu", systemImage: "ellipsis")
+                            .labelStyle(.iconOnly)
+                    }
+                }
+                
+                ToolbarItem(placement: .topBarTrailing) {
+                    if isEditing {
                         Button(role: .adaptiveConfirm) {
                             let res = writeTextIntoFile(fileURL, string: editText)
                             if res {
@@ -62,44 +92,12 @@ struct TextViewer: View {
                             Label("Confirm", systemImage: "checkmark")
                                 .labelStyle(.iconOnly)
                         }
-                    }
-                } else {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Menu {
-                            if !isEditing {
-                                Button {
-                                    isEditing = true
-                                } label: {
-                                    Label("Edit", systemImage: "pencil")
-                                }
-                            }
-                            
-                            Button {
-                                Haptic.shared.play(.soft)
-                                UIPasteboard.general.string = fileText
-                            } label: {
-                                Label("Copy", systemImage: "doc.on.doc")
-                            }
-                            
-                            Button {
-                                if let url = makeTemp(fileURL) {
-                                    presentShareSheet(with: url)
-                                }
-                            } label: {
-                                Label("Share", systemImage: "square.and.arrow.up")
-                            }
-                        } label: {
-                            Label("Menu", systemImage: "ellipsis")
-                                .labelStyle(.iconOnly)
-                        }
-                    }
-                    
-                    ToolbarItem(placement: .topBarTrailing) {
+                    } else {
                         Button {
                             dismiss()
                             mgr.refreshFiles.toggle()
                         } label: {
-                            CloseSheetLabel()
+                            ToolbarLabel("Close", icon: "xmark")
                         }
                     }
                 }
@@ -109,14 +107,8 @@ struct TextViewer: View {
                 fileText = text
                 editText = text
             }
-            /*
-            .onChange(of: isEditing) { editing in
-                if editing && fileText.isEmpty {
-                    editText = "add text here..."
-                }
-            }
-             */
         }
+        .navigationViewStyle(.stack)
     }
     
     private func writeTextIntoFile(_ url: URL, string: String) -> Bool {

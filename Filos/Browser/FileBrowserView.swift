@@ -49,8 +49,7 @@ struct FileItem: Identifiable {
 struct FileBrowserView: View {
     @EnvironmentObject var mgr: FilosManager
     
-    @State var path: URL
-    @Binding var navigationPath: NavigationPath
+    @State var path: URL = URL(fileURLWithPath: "/")
     
     @State private var dirFiles: [FileItem] = []
     @State private var unfilteredFiles: [FileItem] = []
@@ -63,11 +62,13 @@ struct FileBrowserView: View {
     @State private var showSettings = false
     @State private var showFileImporter = false
     
+    @State private var shouldNav = false
+    
     var body: some View {
         List {
             ForEach(dirFiles) { file in
                 if file.type == .folder || file.type == .symlink {
-                    NavigationLink(value: file.url) {
+                    NavigationLink(destination: FileBrowserView(path: file.url)) {
                         FolderRow(file: file)
                     }
                 } else {
@@ -181,7 +182,7 @@ struct FileBrowserView: View {
                             let path = generateNavPath(path: path ?? "")
                             
                             if !path.isEmpty {
-                                navigationPath.append(URL(fileURLWithPath: path))
+                                mgr.fmNavPath = URL(fileURLWithPath: path)
                             }
                         })
                     } label: {
@@ -214,7 +215,7 @@ struct FileBrowserView: View {
             }
         }
         .sheet(isPresented: $showFavs) {
-            FavoritesSheet(navPath: $navigationPath)
+            FavoritesSheet()
         }
         .sheet(isPresented: $showLogs) {
             LogView()

@@ -11,12 +11,19 @@ struct ContentView: View {
     @EnvironmentObject var mgr: FilosManager
     
     var body: some View {
-        NavigationStack(path: $mgr.fmNavPath) {
-            FileBrowserView(path: URL(fileURLWithPath: "/"), navigationPath: $mgr.fmNavPath)
-                .navigationDestination(for: URL.self) { path in
-                    FileBrowserView(path: path, navigationPath: $mgr.fmNavPath)
+        NavigationView {
+            FileBrowserView()
+                .background {
+                    NavigationLink(
+                        destination: FileBrowserView(path: mgr.fmNavPath ?? URL(fileURLWithPath: "/")),
+                        tag: mgr.fmNavPath ?? URL(fileURLWithPath: "/"),
+                        selection: $mgr.fmNavPath
+                    ) {
+                        EmptyView()
+                    }
                 }
         }
+        .navigationViewStyle(.stack)
     }
 }
 

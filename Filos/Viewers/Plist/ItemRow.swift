@@ -17,14 +17,16 @@ struct ItemRow: View {
     var body: some View {
         Group {
             if item.type == .dict || item.type == .array || item.type == .data {
-                LabeledContent(item.key) {
+                HStack {
+                    Text(item.key)
+                    Spacer()
                     Button {
                         showNest.toggle()
                     } label: {
                         HStack {
                             Text(item.type.label)
                             Image(systemName: "chevron.down")
-                                .fontWeight(.semibold)
+                                .font(.body.weight(.semibold))
                                 .imageScale(.small)
                                 .frame(width: 24, height: 24, alignment: .center)
                                 .rotationEffect(.degrees(showNest ? 0 : -90))
@@ -47,7 +49,9 @@ struct ItemRow: View {
                 }
             } else {
                 NavigationLink(destination: ModifyItemPage(item: item).environmentObject(pmgr)) {
-                    LabeledContent(item.key) {
+                    HStack {
+                        Text(item.key)
+                        Spacer()
                         Text(item.stringVal)
                     }
                 }
