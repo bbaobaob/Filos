@@ -10,41 +10,29 @@ import PartyUI
 
 struct SettingsView: View {
     @EnvironmentObject var mgr: FilosManager
-    @Environment(\.openURL) var openURL
     @Environment(\.dismiss) var dismiss
     
     @AppStorage("sbxToken") var sbxToken = ""
     @AppStorage("consumeOnLaunch") var consumeOnLaunch = false
+    @AppStorage("plainList") var plainList = false
     
     var body: some View {
         NavigationView {
             List {
                 Section {
-                    VStack(alignment: .leading, spacing: 10) {
-                        AppInfoCell(build: "Beta 2")
-                        HStack {
-                            Button {
-                                openURL(URL(string: "https://jailbreak.party/discord")!)
-                            } label: {
-                                ButtonLabel(text: "Discord", icon: "discord", useImage: true)
-                            }
-                            .buttonStyle(TranslucentButtonStyle(color: .discord))
-                            
-                            Button {
-                                openURL(URL(string: "https://github.com/jailbreakdotparty/PancakeStore")!)
-                            } label: {
-                                ButtonLabel(text: "GitHub", icon: "github", useImage: true)
-                            }
-                            .buttonStyle(TranslucentButtonStyle(color: .github))
+                    AppInfoCell(build: "Beta 3")
+                    NavigationLink("Credits") {
+                        List {
+                            LinkCreditCell(image: Image("lunginspector"), name: "lunginspector", description: "Primary developer.", url: "https://github.com/lunginspector")
+                            LinkCreditCell(image: Image("skadz"), name: "Skadz", description: "SBX-related stuff and some file browser things.", url: "https://github.com/skadz108")
+                            LinkCreditCell(image: Image("roooot"), name: "roooot", description: "Archiving Utilities.", url: "https://github.com/rooootdev")
                         }
-                        
-                        Button {
-                            openURL(URL(string: "https://jailbreak.party/")!)
-                        } label: {
-                            ButtonLabel(text: "Website", icon: "globe")
-                        }
-                        .buttonStyle(TranslucentButtonStyle())
+                        .navigationTitle("Credits")
                     }
+                } header: {
+                    HeaderLabel(text: "About", icon: "info")
+                } footer: {
+                    Text("Made with love by [lunginspector](https://github.com/lunginspector) for the [jailbreak.party](https://jailbreak.party) team.\nJoin our [discord](https://jailbreak.party/discord)!")
                 }
                 
                 Section {
@@ -78,17 +66,15 @@ struct SettingsView: View {
                             }
                         }
                     }
-                    Toggle("Consume On Launch", isOn: $consumeOnLaunch)
+                    Toggle("Consume on launch", isOn: $consumeOnLaunch)
                 } header: {
                     HeaderLabel(text: "Sandbox Extension Token", icon: "loupe")
                 }
                 
                 Section {
-                    LinkCreditCell(image: Image("lunginspector"), name: "lunginspector", description: "Primary developer.", url: "https://github.com/lunginspector")
-                    LinkCreditCell(image: Image("skadz"), name: "Skadz", description: "SBX-related stuff and some file browser things.", url: "https://github.com/skadz108")
-                    LinkCreditCell(image: Image("roooot"), name: "roooot", description: "Archiving Utilities.", url: "https://github.com/rooootdev")
+                    Toggle("Plain list style", isOn: $plainList)
                 } header: {
-                    HeaderLabel(text: "Credits", icon: "star")
+                    HeaderLabel(text: "View Options", icon: "eye")
                 }
             }
             .navigationTitle("Settings")

@@ -32,6 +32,10 @@ struct InfoViewer: View {
     var fileItem: FileItem
     @State private var fileInfo = FileInfoProperties()
     
+    init(_ fileItem: FileItem) {
+        self.fileItem = fileItem
+    }
+    
     var body: some View {
         NavigationView {
             List {
@@ -151,6 +155,7 @@ struct InfoViewer: View {
             }
             .navigationTitle(fileItem.type == .file ? "File Info" : "Folder Info")
             .navigationBarTitleDisplayMode(.inline)
+            .listStyle(.insetGrouped)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {

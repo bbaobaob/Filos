@@ -13,6 +13,7 @@ struct TextViewer: View {
     @Environment(\.dismiss) var dismiss
     
     var fileURL: URL
+    
     @State private var fileText = ""
     @State private var editText = ""
     @State private var isEditing = false
@@ -39,6 +40,7 @@ struct TextViewer: View {
             }
             .navigationTitle(fileURL.deletingPathExtension().lastPathComponent)
             .navigationBarTitleDisplayMode(.inline)
+            .listStyle(.insetGrouped)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if isEditing {

@@ -67,37 +67,9 @@ struct FileRow: View {
         .foregroundStyle(Color(.label))
         .contextMenu {
             Button {
-                showInfo.toggle()
-            } label: {
-                Label("Get Info", systemImage: "info.circle")
-            }
-            
-            Button {
                 previewURL = file.url
             } label: {
                 Label("Quick Look", systemImage: "eye")
-            }
-            
-            if let type = UTType(fileInfo.uttype), type.conforms(to: .zip) {
-                Button {
-                    do {
-                        let destination = file.url.deletingPathExtension()
-
-                        try FileManager.default.createDirectory(
-                            at: destination,
-                            withIntermediateDirectories: true
-                        )
-
-                        try FileManager.default.unzipItem(
-                            at: file.url,
-                            to: destination
-                        )
-                    } catch {
-                        print("(fm) failed to unzip file: \(error)")
-                    }
-                } label: {
-                    Label("Extract Archive", systemImage: "archivebox")
-                }
             }
             
             if isPlist() {
@@ -115,6 +87,96 @@ struct FileRow: View {
                     Label("Text Viewer", systemImage: "doc.plaintext")
                 }
             }
+            
+            Divider()
+            
+            Button {
+                showInfo.toggle()
+            } label: {
+                Label("Get Info", systemImage: "info.circle")
+            }
+            
+            Button {
+                Alertinator.shared.prompt(title: "What would you like to call this file?", placeholder: file.name, completion: { result in
+                    if let name = result {
+                        do {
+                            let data = try Data(contentsOf: file.url)
+                            try fm.removeItem(at: file.url)
+                            let targetURL = file.url.deletingLastPathComponent().appendingPathComponent(name)
+                            try data.write(to: targetURL)
+                            mgr.refreshFiles.toggle()
+                        } catch {
+                            print("[!] failed to rename file: \(error)")
+                            Alertinator.shared.alert(title: "Failed to rename file!", body: "Check error logs for more detailed information.")
+                        }
+                    }
+                })
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+            
+            
+            if let type = UTType(fileInfo.uttype), type.conforms(to: .zip) {
+                Button {
+                    do {
+                        let destination = file.url.deletingPathExtension()
+
+                        try FileManager.default.createDirectory(
+                            at: destination,
+                            withIntermediateDirectories: true
+                        )
+
+                        try FileManager.default.unzipItem(
+                            at: file.url,
+                            to: destination
+                        )
+                        
+                        mgr.refreshFiles.toggle()
+                    } catch {
+                        print("[!] failed to uncompress: \(error)")
+                        Alertinator.shared.alert(title: "Failed to uncompress file!", body: "Check error logs for more detailed information.")
+                    }
+                } label: {
+                    Label("Uncompress", systemImage: "archivebox")
+                }
+            } else {
+                Button {
+                    do {
+                        let destination = file.url
+                            .deletingLastPathComponent()
+                            .appendingPathComponent(file.url.lastPathComponent + ".zip")
+
+                        try FileManager.default.zipItem(
+                            at: file.url,
+                            to: destination,
+                            shouldKeepParent: true
+                        )
+
+                        mgr.refreshFiles.toggle()
+                    } catch {
+                        print("[!] failed to compress: \(error)")
+                        Alertinator.shared.alert(title: "Failed to compress file!", body: "Check error logs for more detailed information.")
+                    }
+                } label: {
+                    Label("Compress", systemImage: "archivebox")
+                }
+            }
+            
+            Button {
+                do {
+                    let targetURL = file.url.deletingLastPathComponent().appendingPathComponent("\(file.url.deletingPathExtension().lastPathComponent)_copy.\(file.url.pathExtension)")
+                    let data = try Data(contentsOf: file.url)
+                    try data.write(to: targetURL)
+                    mgr.refreshFiles.toggle()
+                } catch {
+                    print("[!] failed to duplicate file: \(error)")
+                    Alertinator.shared.alert(title: "Failed to duplicate file!", body: "Check error logs for more detailed information.")
+                }
+            } label: {
+                Label("Duplicate", systemImage: "plus.square.on.square")
+            }
+            
+            Divider()
             
             if let index = favList.firstIndex(where: { $0.path == file.url.path }) {
                 Button {
@@ -172,7 +234,7 @@ struct FileRow: View {
             fileInfo = getFileInfo(file.url)
         }
         .sheet(isPresented: $showInfo) {
-            InfoViewer(fileItem: file)
+            InfoViewer(file)
         }
         .sheet(isPresented: $showPlistViewer) {
             PlistViewer(file.url)
@@ -185,8 +247,8 @@ struct FileRow: View {
     
     private func isPlist() -> Bool {
         do {
-            let data = try Data(contentsOf: file.url)
-            try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+            guard let data = try? Data(contentsOf: file.url) else { return false }
+            let _ = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String : Any]
             return true
         } catch {
             return false

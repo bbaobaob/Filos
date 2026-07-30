@@ -9,9 +9,9 @@ import SwiftUI
 import PartyUI
 
 struct LogView: View {
-    @Environment(\.dismiss) var dismiss
     @EnvironmentObject var mgr: FilosManager
-
+    @Environment(\.dismiss) var dismiss
+    
     var body: some View {
         NavigationView {
             GeometryReader { _ in
@@ -80,9 +80,4 @@ struct LogView: View {
         }
         .navigationViewStyle(.stack)
     }
-}
-
-#Preview {
-    LogView()
-        .environmentObject(FilosManager.shared)
 }

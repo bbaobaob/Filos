@@ -11,6 +11,7 @@ import PartyUI
 struct PlistViewer: View {
     @StateObject private var pmgr = PlistManager.shared
     @Environment(\.dismiss) var dismiss
+    
     var fileURL: URL
     
     init(_ fileURL: URL) {
@@ -28,6 +29,7 @@ struct PlistViewer: View {
             }
             .navigationTitle(fileURL.lastPathComponent)
             .navigationBarTitleDisplayMode(.inline)
+            .listStyle(.insetGrouped)
             .onAppear {
                 let res = pmgr.loadPlistItems()
                 if !res {

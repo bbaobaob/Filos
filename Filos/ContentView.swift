@@ -13,15 +13,6 @@ struct ContentView: View {
     var body: some View {
         NavigationView {
             FileBrowserView()
-                .background {
-                    NavigationLink(
-                        destination: FileBrowserView(path: mgr.fmNavPath ?? URL(fileURLWithPath: "/")),
-                        tag: mgr.fmNavPath ?? URL(fileURLWithPath: "/"),
-                        selection: $mgr.fmNavPath
-                    ) {
-                        EmptyView()
-                    }
-                }
         }
         .navigationViewStyle(.stack)
     }

@@ -59,15 +59,17 @@ struct FolderRow: View {
         }
         .contextMenu {
             Button {
-                showInfo.toggle()
-            } label: {
-                Label("Get Info", systemImage: "info.circle")
-            }
-            
-            Button {
                 previewURL = file.url
             } label: {
                 Label("Quick Look", systemImage: "eye")
+            }
+            
+            Divider()
+            
+            Button {
+                showInfo.toggle()
+            } label: {
+                Label("Get Info", systemImage: "info.circle")
             }
             
             Button {
@@ -128,7 +130,7 @@ struct FolderRow: View {
             fileInfo = getFileInfo(file.url)
         }
         .sheet(isPresented: $showInfo) {
-            InfoViewer(fileItem: file)
+            InfoViewer(file)
         }
         .quickLookPreview($previewURL)
     }

@@ -56,13 +56,12 @@ struct FileBrowserView: View {
     @State private var searchText = ""
     @AppStorage("chosenSort") var chosenSort: FileSortMode = .system
     @AppStorage("filesAscend") var filesAscend: Bool = true
+    @AppStorage("plainList") var plainList = false
     
     @State private var showFavs = false
     @State private var showLogs = false
     @State private var showSettings = false
     @State private var showFileImporter = false
-    
-    @State private var shouldNav = false
     
     var body: some View {
         List {
@@ -178,7 +177,7 @@ struct FileBrowserView: View {
                     Divider()
                     
                     Button {
-                        Alertinator.shared.prompt(title: "Enter a path (case-sensitive!)", placeholder: "/", completion: { path in
+                        Alertinator.shared.prompt(title: "Where would you like to go?", placeholder: path.path, completion: { path in
                             let path = generateNavPath(path: path ?? "")
                             
                             if !path.isEmpty {
@@ -214,6 +213,7 @@ struct FileBrowserView: View {
                 .labelStyle(.iconOnly)
             }
         }
+        .settingsListStyle(isPlain: plainList)
         .sheet(isPresented: $showFavs) {
             FavoritesSheet()
         }
@@ -322,6 +322,18 @@ struct FileBrowserView: View {
         case .failure(let error):
             print("(fm) failed to import file: \(error)")
             Alertinator.shared.alert(title: "Failed to import file!", body: "\(error)")
+        }
+    }
+}
+
+// bullshit
+extension View {
+    @ViewBuilder
+    func settingsListStyle(isPlain: Bool) -> some View {
+        if isPlain {
+            self.listStyle(.inset)
+        } else {
+            self.listStyle(.insetGrouped)
         }
     }
 }
