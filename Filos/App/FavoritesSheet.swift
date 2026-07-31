@@ -54,36 +54,38 @@ struct FavoritesSheet: View {
                     HeaderLabel(text: "Filos", icon: "folder")
                 }
                 
-                Section {
-                    ForEach(favList) { fav in
-                        Button {
-                            let path = generateNavPath(path: fav.path)
-                            mgr.push(URL(fileURLWithPath: path))
-                            dismiss()
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(fav.label)
-                                    Text(fav.path)
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Chevron()
-                            }
-                        }
-                        .foregroundStyle(Color(.label))
-                        .padding(.vertical, !isSolariumUI() ? 1 : 0)
-                        .contextMenu {
-                            Button(role: .destructive) {
-                                favList.removeAll { $0.id == fav.id }
+                if !favList.isEmpty {
+                    Section {
+                        ForEach(favList) { fav in
+                            Button {
+                                let path = generateNavPath(path: fav.path)
+                                mgr.push(URL(fileURLWithPath: path))
+                                dismiss()
                             } label: {
-                                Label("Remove", systemImage: "trash")
+                                HStack {
+                                    VStack(alignment: .leading) {
+                                        Text(fav.label)
+                                        Text(fav.path)
+                                            .font(.footnote)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Chevron()
+                                }
+                            }
+                            .foregroundStyle(Color(.label))
+                            .padding(.vertical, !isSolariumUI() ? 1 : 0)
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    favList.removeAll { $0.id == fav.id }
+                                } label: {
+                                    Label("Remove", systemImage: "trash")
+                                }
                             }
                         }
+                    } header: {
+                        HeaderLabel(text: "Favorites", icon: "star")
                     }
-                } header: {
-                    HeaderLabel(text: "Favorites", icon: "star")
                 }
             }
             .navigationTitle("Favorites")

@@ -48,7 +48,12 @@ struct FileBrowserContainer: View {
         if mgr.navArray.count > level {
             FileBrowserContainer(level: level + 1, url: mgr.navArray[level].url)
         } else {
-            EmptyView()
+            VStack {
+                HStack {
+                    ProgressView()
+                    Text("Loading...")
+                }
+            }
         }
     }
 }

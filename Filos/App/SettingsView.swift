@@ -15,6 +15,7 @@ struct SettingsView: View {
     @AppStorage("sbxToken") var sbxToken = ""
     @AppStorage("consumeOnLaunch") var consumeOnLaunch = false
     @AppStorage("plainList") var plainList = false
+    @AppStorage("hideFavs") var hideFavs = false
     
     var body: some View {
         NavigationView {
@@ -30,9 +31,9 @@ struct SettingsView: View {
                         .navigationTitle("Credits")
                     }
                 } header: {
-                    HeaderLabel(text: "About", icon: "info")
+                    HeaderLabel(text: "About", icon: "info.circle")
                 } footer: {
-                    Text("Made with love by [lunginspector](https://github.com/lunginspector) for the [jailbreak.party](https://jailbreak.party) team.\nJoin our [discord](https://jailbreak.party/discord)!")
+                    Text("Made with love by [lunginspector](https://github.com/lunginspector) under the [jailbreak.party](https://jailbreak.party) team.\nJoin our [discord](https://jailbreak.party/discord)!")
                 }
                 
                 Section {
@@ -73,6 +74,7 @@ struct SettingsView: View {
                 
                 Section {
                     Toggle("Plain list style", isOn: $plainList)
+                    Toggle("Hide \"Favorite\" button", isOn: $hideFavs)
                 } header: {
                     HeaderLabel(text: "View Options", icon: "eye")
                 }

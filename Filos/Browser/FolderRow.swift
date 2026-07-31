@@ -13,6 +13,7 @@ import ZIPFoundation
 struct FolderRow: View {
     @EnvironmentObject var mgr: FilosManager
     @AppStorage("favList") var favList: [FavoriteItem] = []
+    @AppStorage("hideFavs") var hideFavs = false
     
     var file: FileItem
     
@@ -92,17 +93,19 @@ struct FolderRow: View {
                 Label("Compress", systemImage: "archivebox")
             }
             
-            if let index = favList.firstIndex(where: { $0.path == file.url.path }) {
-                Button {
-                    favList.remove(at: index)
-                } label: {
-                    Label("Remove Favorite", systemImage: "star.slash")
-                }
-            } else {
-                Button {
-                    favList.append(FavoriteItem(label: file.name, path: file.url.path))
-                } label: {
-                    Label("Favorite", systemImage: "star")
+            if !hideFavs {
+                if let index = favList.firstIndex(where: { $0.path == file.url.path }) {
+                    Button {
+                        favList.remove(at: index)
+                    } label: {
+                        Label("Remove Favorite", systemImage: "star.slash")
+                    }
+                } else {
+                    Button {
+                        favList.append(FavoriteItem(label: file.name, path: file.url.path))
+                    } label: {
+                        Label("Favorite", systemImage: "star")
+                    }
                 }
             }
             

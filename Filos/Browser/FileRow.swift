@@ -13,6 +13,7 @@ import ZIPFoundation
 struct FileRow: View {
     @EnvironmentObject var mgr: FilosManager
     @AppStorage("favList") var favList: [FavoriteItem] = []
+    @AppStorage("hideFavs") var hideFavs = false
     
     var file: FileItem
     
@@ -66,25 +67,37 @@ struct FileRow: View {
         }
         .foregroundStyle(Color(.label))
         .contextMenu {
-            Button {
-                previewURL = file.url
-            } label: {
-                Label("Quick Look", systemImage: "eye")
-            }
-            
-            if isPlist() {
-                Button {
-                    showPlistViewer.toggle()
-                } label: {
-                    Label("Plist Viewer", systemImage: "text.document")
-                }
-            }
-            
             if isText() || isPlist() {
-                Button {
-                    showTextViewer.toggle()
+                Menu {
+                    Button {
+                        previewURL = file.url
+                    } label: {
+                        Label("Quick Look", systemImage: "eye")
+                    }
+                    
+                    if isPlist() {
+                        Button {
+                            showPlistViewer.toggle()
+                        } label: {
+                            Label("Plist Viewer", systemImage: "tablecells")
+                        }
+                    }
+                    
+                    if isText() || isPlist() {
+                        Button {
+                            showTextViewer.toggle()
+                        } label: {
+                            Label("Text Viewer", systemImage: "doc.plaintext")
+                        }
+                    }
                 } label: {
-                    Label("Text Viewer", systemImage: "doc.plaintext")
+                    Label("View In...", systemImage: "doc.text.magnifyingglass")
+                }
+            } else {
+                Button {
+                    previewURL = file.url
+                } label: {
+                    Label("Quick Look", systemImage: "eye")
                 }
             }
             
@@ -176,19 +189,21 @@ struct FileRow: View {
                 Label("Duplicate", systemImage: "plus.square.on.square")
             }
             
-            Divider()
-            
-            if let index = favList.firstIndex(where: { $0.path == file.url.path }) {
-                Button {
-                    favList.remove(at: index)
-                } label: {
-                    Label("Remove Favorite", systemImage: "star.slash")
-                }
-            } else {
-                Button {
-                    favList.append(FavoriteItem(label: file.name, path: file.url.path))
-                } label: {
-                    Label("Favorite", systemImage: "star")
+            if !hideFavs {
+                Divider()
+                
+                if let index = favList.firstIndex(where: { $0.path == file.url.path }) {
+                    Button {
+                        favList.remove(at: index)
+                    } label: {
+                        Label("Remove Favorite", systemImage: "star.slash")
+                    }
+                } else {
+                    Button {
+                        favList.append(FavoriteItem(label: file.name, path: file.url.path))
+                    } label: {
+                        Label("Favorite", systemImage: "star")
+                    }
                 }
             }
             

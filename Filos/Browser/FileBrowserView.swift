@@ -44,6 +44,7 @@ struct FileItem: Identifiable {
     let size: Int
     let modifiedDate: Date
     let url: URL
+    let symURL: URL
 }
 
 struct FileBrowserView: View {
@@ -70,10 +71,11 @@ struct FileBrowserView: View {
             ForEach(dirFiles) { file in
                 if file.type == .folder || file.type == .symlink {
                     Button {
-                        mgr.push(file.url)
+                        mgr.push(file.type == .symlink ? file.symURL : file.url)
                     } label: {
                         FolderRow(file: file)
                     }
+                    .foregroundStyle(Color(.label))
                 } else {
                     FileRow(file: file)
                 }
@@ -267,7 +269,12 @@ struct FileBrowserView: View {
                 let fileSize = values.fileSize ?? 0
                 let fileType: FileType = isSymlink ? .symlink : isDirectory ? .folder : .file
                 
-                return FileItem(id: fileURL.path, name: fileURL.lastPathComponent, type: fileType, size: fileSize, modifiedDate: modifiedDate, url: fileURL)
+                var symURL = URL(fileURLWithPath: "/")
+                if let symPath = try? fm.destinationOfSymbolicLink(atPath: fileURL.path) {
+                    symURL = URL(fileURLWithPath: symPath)
+                }
+                
+                return FileItem(id: fileURL.path, name: fileURL.lastPathComponent, type: fileType, size: fileSize, modifiedDate: modifiedDate, url: fileURL, symURL: symURL)
             }
             dirFiles = sortFiles(files: unsortedFiles)
             unfilteredFiles = sortFiles(files: unsortedFiles)
