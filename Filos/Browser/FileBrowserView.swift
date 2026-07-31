@@ -63,11 +63,15 @@ struct FileBrowserView: View {
     @State private var showSettings = false
     @State private var showFileImporter = false
     
+    @State private var shouldNav = false
+    
     var body: some View {
         List {
             ForEach(dirFiles) { file in
                 if file.type == .folder || file.type == .symlink {
-                    NavigationLink(destination: FileBrowserView(path: file.url)) {
+                    Button {
+                        mgr.push(file.url)
+                    } label: {
                         FolderRow(file: file)
                     }
                 } else {
@@ -181,7 +185,7 @@ struct FileBrowserView: View {
                             let path = generateNavPath(path: path ?? "")
                             
                             if !path.isEmpty {
-                                mgr.fmNavPath = URL(fileURLWithPath: path)
+                                mgr.push(URL(fileURLWithPath: path))
                             }
                         })
                     } label: {

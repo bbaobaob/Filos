@@ -12,9 +12,44 @@ struct ContentView: View {
     
     var body: some View {
         NavigationView {
-            FileBrowserView()
+            FileBrowserContainer(level: 0, url: URL(fileURLWithPath: "/"))
+                .environmentObject(mgr)
         }
         .navigationViewStyle(.stack)
+    }
+}
+
+struct FileBrowserContainer: View {
+    @EnvironmentObject var mgr: FilosManager
+    let level: Int
+    let url: URL
+    
+    var body: some View {
+        FileBrowserView(path: url)
+            .environmentObject(mgr)
+            .background {
+                NavigationLink(
+                    destination: destView,
+                    isActive: Binding(get: {
+                        mgr.navArray.count > level
+                    }, set: { newValue in
+                        if !newValue, mgr.navArray.count > level {
+                            mgr.navArray.removeSubrange(level...)
+                        }
+                    })
+                ) {
+                    EmptyView()
+                }
+            }
+    }
+    
+    @ViewBuilder
+    private var destView: some View {
+        if mgr.navArray.count > level {
+            FileBrowserContainer(level: level + 1, url: mgr.navArray[level].url)
+        } else {
+            EmptyView()
+        }
     }
 }
 

@@ -11,16 +11,26 @@ import Combine
 import PartyUI
 import UniformTypeIdentifiers
 
+struct NavItem {
+    let id = UUID()
+    let url: URL
+}
+
 final class FilosManager: ObservableObject {
     static let shared = FilosManager()
     
     @Published var refreshFiles = false
-    @Published var fmNavPath: URL = URL(fileURLWithPath: "/")
     
     @Published var logOutput = ""
     @Published var tokenVaild = false
     
+    @Published var navArray: [NavItem] = []
+    
     init() { }
+    
+    func push(_ url: URL) {
+        navArray.append(NavItem(url: url))
+    }
 }
 
 // ios 15 surprise!

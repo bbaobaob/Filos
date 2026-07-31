@@ -31,21 +31,21 @@ struct FavoritesSheet: View {
             List {
                 Section {
                     Button {
-                        mgr.fmNavPath = URL.documentsDirectory
+                        mgr.push(URL.documentsDirectory)
                         dismiss()
                     } label: {
                         NavigationLabel(text: "Documents")
                     }
                     
                     Button {
-                        mgr.fmNavPath = URL.temporaryDirectory
+                        mgr.push(URL.temporaryDirectory)
                         dismiss()
                     } label: {
                         NavigationLabel(text: "Temp")
                     }
                     
                     Button {
-                        mgr.fmNavPath = URL.documentsDirectory.deletingLastPathComponent()
+                        mgr.push(URL.documentsDirectory.deletingLastPathComponent())
                         dismiss()
                     } label: {
                         NavigationLabel(text: "Container")
@@ -58,7 +58,7 @@ struct FavoritesSheet: View {
                     ForEach(favList) { fav in
                         Button {
                             let path = generateNavPath(path: fav.path)
-                            mgr.fmNavPath = URL(fileURLWithPath: path)
+                            mgr.push(URL(fileURLWithPath: path))
                             dismiss()
                         } label: {
                             HStack {
