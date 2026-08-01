@@ -9,18 +9,6 @@ import SwiftUI
 import PartyUI
 import QuickLook
 
-enum FileType {
-    case file, folder, symlink
-    
-    var sortOrder: Int {
-        switch self {
-        case .file: return 0
-        case .symlink: return 1
-        case .folder: return 2
-        }
-    }
-}
-
 enum FileSortMode: String, CaseIterable, Codable, Hashable {
     case system, name, date, type, size
     
@@ -35,16 +23,6 @@ enum FileSortMode: String, CaseIterable, Codable, Hashable {
         case .size: return "Size"
         }
     }
-}
-
-struct FileItem: Identifiable {
-    var id: String
-    let name: String
-    let type: FileType
-    let size: Int
-    let modifiedDate: Date
-    let url: URL
-    let symURL: URL
 }
 
 struct FileBrowserView: View {
@@ -256,20 +234,8 @@ struct FileBrowserView: View {
         do {
             let pathFiles = try FileManager.default.contentsOfDirectory(at: path, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey])
             
-            let unsortedFiles = try pathFiles.map { fileURL in
-                let values = try fileURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey])
-                let isDirectory = values.isDirectory ?? false
-                let isSymlink = values.isSymbolicLink ?? false
-                let modifiedDate = values.contentModificationDate ?? Date()
-                let fileSize = values.fileSize ?? 0
-                let fileType: FileType = isSymlink ? .symlink : isDirectory ? .folder : .file
-                
-                var symURL = URL(fileURLWithPath: "/")
-                if let symPath = try? fm.destinationOfSymbolicLink(atPath: fileURL.path) {
-                    symURL = URL(fileURLWithPath: symPath)
-                }
-                
-                return FileItem(id: fileURL.path, name: fileURL.lastPathComponent, type: fileType, size: fileSize, modifiedDate: modifiedDate, url: fileURL, symURL: symURL)
+            let unsortedFiles = pathFiles.map { fileURL in
+                return getFileItem(at: fileURL)
             }
             dirFiles = sortFiles(files: unsortedFiles)
             unfilteredFiles = sortFiles(files: unsortedFiles)
@@ -298,7 +264,7 @@ struct FileBrowserView: View {
         sortedFiles = filesAscend ? sortedFiles : sortedFiles.reversed()
         
         sortedFiles = sortedFiles.sorted { a, b in
-            a.name.hasPrefix(".") && !b.name.hasPrefix(".")
+            a.hidden && !b.hidden
         }
         
         return sortedFiles

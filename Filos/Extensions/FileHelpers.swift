@@ -73,17 +73,16 @@ func generateNavPath(path: String) -> String {
         return ""
     }
     
-    let fileDetails = getFileInfo(URL(fileURLWithPath: path))
+    let file = getFileItem(at: URL(fileURLWithPath: path))
     
-    if fileDetails.kind == "directory" || fileDetails.isSymlink {
+    if file.type == .folder || file.type == .symlink {
         return path
     }
     
-    if fileDetails.kind == "file" {
+    if file.type == .file {
         let navPath = URL(fileURLWithPath: path).deletingLastPathComponent().path
         return navPath
     }
-    
     return ""
 }
 

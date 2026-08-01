@@ -16,6 +16,7 @@ struct SettingsView: View {
     @AppStorage("consumeOnLaunch") var consumeOnLaunch = false
     @AppStorage("plainList") var plainList = false
     @AppStorage("hideFavs") var hideFavs = false
+    @AppStorage("hideDates") var hideDates = false
     
     var body: some View {
         NavigationView {
@@ -75,6 +76,7 @@ struct SettingsView: View {
                 Section {
                     Toggle("Plain list style", isOn: $plainList)
                     Toggle("Hide \"Favorite\" button", isOn: $hideFavs)
+                    Toggle("Hide dates in listed items", isOn: $hideDates)
                 } header: {
                     HeaderLabel(text: "View Options", icon: "eye")
                 }

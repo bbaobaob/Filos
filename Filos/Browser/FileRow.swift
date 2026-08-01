@@ -14,11 +14,9 @@ struct FileRow: View {
     @EnvironmentObject var mgr: FilosManager
     @AppStorage("favList") var favList: [FavoriteItem] = []
     @AppStorage("hideFavs") var hideFavs = false
+    @AppStorage("hideDates") var hideDates = false
     
     var file: FileItem
-    
-    @State private var previewURL: URL?
-    @State private var fileInfo: FileInfoProperties = FileInfoProperties(fileExists: false, kind: "", uttype: "", size: 0, created: "", modified: "", isSymlink: false, posixPerms: "", owner: "", group: "", readable: false, writable: false, executable: false)
     
     @State private var conformsText = false
     @State private var conformsPlist = false
@@ -27,13 +25,14 @@ struct FileRow: View {
     @State private var showInfo = false
     @State private var showPlistViewer = false
     @State private var showTextViewer = false
+    @State private var previewURL: URL?
     
     var body: some View {
         Group {
             if file.type == .file {
                 Button {
                     if conformsZip {
-                        let res = unzipFile(file.url)
+                        let res = unzipFile(file.fileURL)
                         if res {
                             mgr.refreshFiles.toggle()
                         } else {
@@ -45,22 +44,22 @@ struct FileRow: View {
                         } else if conformsText {
                             showTextViewer.toggle()
                         } else {
-                            previewURL = file.url
+                            previewURL = file.fileURL
                         }
                     }
                 } label: {
                     HStack(spacing: isSolariumUI() ? 12 : 10) {
                         Image(systemName: "doc")
                             .frame(width: 20, alignment: .center)
-                            .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
+                            .foregroundStyle(file.hidden ? .secondary : .primary)
                         
                         VStack(alignment: .leading) {
                             Text(file.name)
-                                .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
+                                .foregroundStyle(file.hidden ? .secondary : .primary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
-                            if !fileInfo.modified.isEmpty && file.type == .file {
-                                Text(fileInfo.modified)
+                            if !hideDates && !file.modifiedDateStr.isEmpty && file.type == .file {
+                                Text(file.modifiedDateStr)
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
@@ -80,19 +79,19 @@ struct FileRow: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    .padding(.vertical, !fileInfo.modified.isEmpty && file.type == .file && !isSolariumUI() ? 1 : 0)
+                    .padding(.vertical, !hideDates && file.modifiedDateStr.isEmpty && file.type == .file && !isSolariumUI() ? 1 : 0)
                 }
             } else {
                 Button {
-                    mgr.push(file.symURL)
+                    mgr.push(file.destURL)
                 } label: {
                     HStack(spacing: isSolariumUI() ? 12 : 10) {
                         Image(systemName: "arrow.up.right.circle")
                             .frame(width: 20, alignment: .center)
-                            .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
+                            .foregroundStyle(file.hidden ? .secondary : .primary)
                         
                         Text(file.name)
-                            .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
+                            .foregroundStyle(file.hidden ? .secondary : .primary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -111,10 +110,9 @@ struct FileRow: View {
         }
         .foregroundStyle(Color(.label))
         .onAppear {
-            fileInfo = getFileInfo(file.url)
-            conformsText = conformsToTextViewer(file.url)
-            conformsPlist = conformsToPlistViewer(file.url)
-            if let type = UTType(fileInfo.uttype), type.conforms(to: .zip) {
+            conformsText = conformsToTextViewer(file.fileURL)
+            conformsPlist = conformsToPlistViewer(file.fileURL)
+            if file.uttype.conforms(to: .zip) {
                 conformsZip = true
             }
         }
@@ -122,10 +120,10 @@ struct FileRow: View {
             InfoViewer(file)
         }
         .sheet(isPresented: $showPlistViewer) {
-            PlistViewer(file.url)
+            PlistViewer(file.fileURL)
         }
         .sheet(isPresented: $showTextViewer) {
-            TextViewer(file.url)
+            TextViewer(file.fileURL)
         }
         .quickLookPreview($previewURL)
         // MARK: cell actions
@@ -133,7 +131,7 @@ struct FileRow: View {
             if conformsText || conformsPlist {
                 Menu {
                     Button {
-                        previewURL = file.url
+                        previewURL = file.fileURL
                     } label: {
                         Label("Quick Look", systemImage: "eye")
                     }
@@ -158,7 +156,7 @@ struct FileRow: View {
                 }
             } else {
                 Button {
-                    previewURL = file.url
+                    previewURL = file.fileURL
                 } label: {
                     Label("Quick Look", systemImage: "eye")
                 }
@@ -176,7 +174,7 @@ struct FileRow: View {
                 Button {
                     Alertinator.shared.prompt(title: "What would you like to call this file?", placeholder: file.name, completion: { result in
                         if let name = result {
-                            let res = renameFile(file.url, to: name)
+                            let res = renameFile(file.fileURL, to: name)
                             if res {
                                 mgr.refreshFiles.toggle()
                             } else {
@@ -192,7 +190,7 @@ struct FileRow: View {
             if file.type == .file {
                 if conformsZip {
                     Button {
-                        let res = unzipFile(file.url)
+                        let res = unzipFile(file.fileURL)
                         if res {
                             mgr.refreshFiles.toggle()
                         } else {
@@ -203,7 +201,7 @@ struct FileRow: View {
                     }
                 } else {
                     Button {
-                        let res = zipFile(file.url)
+                        let res = zipFile(file.fileURL)
                         if res {
                             mgr.refreshFiles.toggle()
                         } else {
@@ -217,7 +215,7 @@ struct FileRow: View {
             
             if file.type == .file {
                 Button {
-                    let res = duplicateFile(file.url)
+                    let res = duplicateFile(file.fileURL)
                     if res {
                         mgr.refreshFiles.toggle()
                     } else {
@@ -231,7 +229,7 @@ struct FileRow: View {
             if !hideFavs {
                 Divider()
                 
-                if let index = favList.firstIndex(where: { $0.path == file.url.path }) {
+                if let index = favList.firstIndex(where: { $0.path == file.fileURL.path }) {
                     Button {
                         favList.remove(at: index)
                     } label: {
@@ -239,7 +237,7 @@ struct FileRow: View {
                     }
                 } else {
                     Button {
-                        favList.append(FavoriteItem(label: file.name, path: file.url.path))
+                        favList.append(FavoriteItem(label: file.name, path: file.fileURL.path))
                     } label: {
                         Label("Favorite", systemImage: "star")
                     }
@@ -249,7 +247,7 @@ struct FileRow: View {
             Divider()
             
             Button {
-                let res = copyFileToClipboard(file.url)
+                let res = copyFileToClipboard(file.fileURL)
                 if !res {
                     Alertinator.shared.alert(title: "Failed to copy file!", body: Errors.checkLogs)
                 }
@@ -258,7 +256,7 @@ struct FileRow: View {
             }
             
             Button {
-                if let url = makeTemp(file.url) {
+                if let url = makeTemp(file.fileURL) {
                     presentShareSheet(with: url)
                 }
             } label: {
@@ -269,7 +267,7 @@ struct FileRow: View {
             
             Button(role: .destructive) {
                 do {
-                    try fm.removeItem(at: file.url)
+                    try fm.removeItem(at: file.fileURL)
                     mgr.refreshFiles.toggle()
                 } catch {
                     print("[!] failed to delete file: \(error)")

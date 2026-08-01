@@ -18,14 +18,13 @@ struct FolderRow: View {
     var file: FileItem
     
     @State private var previewURL: URL?
-    @State private var fileInfo: FileInfoProperties = FileInfoProperties(fileExists: false, kind: "", uttype: "", size: 0, created: "", modified: "", isSymlink: false, posixPerms: "", owner: "", group: "", readable: false, writable: false, executable: false)
     @State private var folderType: FolderType = .normal
     
     @State private var showInfo = false
     
     var body: some View {
         Button {
-            mgr.push(file.url)
+            mgr.push(file.destURL)
         } label: {
             HStack(spacing: isSolariumUI() ? 12 : 10) {
                 Group {
@@ -33,21 +32,21 @@ struct FolderRow: View {
                         Image(systemName: "app")
                             .frame(width: 20, alignment: .center)
                         VStack(alignment: .leading) {
-                            Text(folderLabel(url: file.url))
-                                .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
+                            Text(folderLabel(url: file.fileURL))
+                                .foregroundStyle(file.hidden ? .secondary : .primary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
-                            Text(file.url.path)
+                            Text(file.fileURL.path)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
                     } else {
                         Image(systemName: "folder")
                             .frame(width: 20, alignment: .center)
-                            .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
+                            .foregroundStyle(file.hidden ? .secondary : .primary)
                         Text(file.name)
                             .lineLimit(1)
-                            .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
+                            .foregroundStyle(file.hidden ? .secondary : .primary)
                     }
                 }
                 
@@ -59,15 +58,14 @@ struct FolderRow: View {
                     Image(systemName: "info.circle")
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
+                .foregroundStyle(file.hidden ? .secondary : .primary)
                 
                 Chevron()
             }
         }
         .foregroundStyle(Color(.label))
         .onAppear {
-            folderType = getFolderType(url: file.url)
-            fileInfo = getFileInfo(file.url)
+            folderType = getFolderType(url: file.fileURL)
         }
         .sheet(isPresented: $showInfo) {
             InfoViewer(file)
@@ -75,7 +73,7 @@ struct FolderRow: View {
         .quickLookPreview($previewURL)
         .contextMenu {
             Button {
-                previewURL = file.url
+                previewURL = file.fileURL
             } label: {
                 Label("Quick Look", systemImage: "eye")
             }
@@ -89,7 +87,7 @@ struct FolderRow: View {
             }
             
             Button {
-                let res = zipFile(file.url)
+                let res = zipFile(file.fileURL)
                 if res {
                     mgr.refreshFiles.toggle()
                 } else {
@@ -100,7 +98,7 @@ struct FolderRow: View {
             }
             
             if !hideFavs {
-                if let index = favList.firstIndex(where: { $0.path == file.url.path }) {
+                if let index = favList.firstIndex(where: { $0.path == file.fileURL.path }) {
                     Button {
                         favList.remove(at: index)
                     } label: {
@@ -108,7 +106,7 @@ struct FolderRow: View {
                     }
                 } else {
                     Button {
-                        favList.append(FavoriteItem(label: file.name, path: file.url.path))
+                        favList.append(FavoriteItem(label: file.name, path: file.fileURL.path))
                     } label: {
                         Label("Favorite", systemImage: "star")
                     }
@@ -118,7 +116,7 @@ struct FolderRow: View {
             Divider()
             
             Button {
-                if let url = makeTemp(file.url) {
+                if let url = makeTemp(file.fileURL) {
                     presentShareSheet(with: url)
                 }
             } label: {
@@ -128,7 +126,7 @@ struct FolderRow: View {
             Divider()
             
             Button(role: .destructive) {
-                try? fm.removeItem(at: file.url)
+                try? fm.removeItem(at: file.fileURL)
                 mgr.refreshFiles.toggle()
             } label: {
                 Label("Delete", systemImage: "trash")
