@@ -11,6 +11,10 @@ import Combine
 import PartyUI
 import UniformTypeIdentifiers
 
+enum Errors {
+    static var checkLogs = "Check error logs for more detailed information."
+}
+
 struct NavItem {
     let id = UUID()
     let url: URL

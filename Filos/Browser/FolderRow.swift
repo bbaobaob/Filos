@@ -24,40 +24,55 @@ struct FolderRow: View {
     @State private var showInfo = false
     
     var body: some View {
-        HStack(spacing: isSolariumUI() ? 12 : 10) {
-            Group {
-                if folderType == .bundle || folderType == .container {
-                    Image(systemName: "app")
-                        .frame(width: 20, alignment: .center)
-                    VStack(alignment: .leading) {
-                        Text(folderLabel(url: file.url))
+        Button {
+            mgr.push(file.url)
+        } label: {
+            HStack(spacing: isSolariumUI() ? 12 : 10) {
+                Group {
+                    if folderType == .bundle || folderType == .container {
+                        Image(systemName: "app")
+                            .frame(width: 20, alignment: .center)
+                        VStack(alignment: .leading) {
+                            Text(folderLabel(url: file.url))
+                                .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Text(file.url.path)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Image(systemName: "folder")
+                            .frame(width: 20, alignment: .center)
                             .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
+                        Text(file.name)
                             .lineLimit(1)
-                            .truncationMode(.middle)
-                        Text(file.url.path)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
                     }
-                } else {
-                    Image(systemName: file.type == .symlink ? "arrow.up.right.circle" : "folder")
-                        .frame(width: 20, alignment: .center)
-                        .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
-                    Text(file.name)
-                        .lineLimit(1)
-                        .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
                 }
+                
+                Spacer()
+                
+                Button {
+                    showInfo.toggle()
+                } label: {
+                    Image(systemName: "info.circle")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
+                
+                Chevron()
             }
-            
-            Spacer()
-            
-            Button {
-                showInfo.toggle()
-            } label: {
-                Image(systemName: "info.circle")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
         }
+        .foregroundStyle(Color(.label))
+        .onAppear {
+            folderType = getFolderType(url: file.url)
+            fileInfo = getFileInfo(file.url)
+        }
+        .sheet(isPresented: $showInfo) {
+            InfoViewer(file)
+        }
+        .quickLookPreview($previewURL)
         .contextMenu {
             Button {
                 previewURL = file.url
@@ -74,20 +89,11 @@ struct FolderRow: View {
             }
             
             Button {
-                do {
-                    let destination = file.url
-                        .deletingLastPathComponent()
-                        .appendingPathComponent(file.url.lastPathComponent + ".zip")
-
-                    try FileManager.default.zipItem(
-                        at: file.url,
-                        to: destination,
-                        shouldKeepParent: true
-                    )
-
+                let res = zipFile(file.url)
+                if res {
                     mgr.refreshFiles.toggle()
-                } catch {
-                    print("Failed to zip: \(error)")
+                } else {
+                    Alertinator.shared.alert(title: "Failed to compress file!", body: Errors.checkLogs)
                 }
             } label: {
                 Label("Compress", systemImage: "archivebox")
@@ -128,13 +134,5 @@ struct FolderRow: View {
                 Label("Delete", systemImage: "trash")
             }
         }
-        .onAppear {
-            folderType = getFolderType(url: file.url)
-            fileInfo = getFileInfo(file.url)
-        }
-        .sheet(isPresented: $showInfo) {
-            InfoViewer(file)
-        }
-        .quickLookPreview($previewURL)
     }
 }

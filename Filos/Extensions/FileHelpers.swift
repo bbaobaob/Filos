@@ -7,6 +7,8 @@
 
 import SwiftUI
 import PartyUI
+import ZIPFoundation
+import UniformTypeIdentifiers
 
 enum FSPaths {
     static var appBundles = "/private/var/containers/Bundle/Application"
@@ -83,4 +85,98 @@ func generateNavPath(path: String) -> String {
     }
     
     return ""
+}
+
+func renameFile(_ url: URL, to newName: String) -> Bool {
+    do {
+        let data = try Data(contentsOf: url)
+        try fm.removeItem(at: url)
+        let targetURL = url.deletingLastPathComponent().appendingPathComponent(newName)
+        try data.write(to: targetURL)
+        return true
+    } catch {
+        print("[!] failed to rename file: \(error)")
+    }
+    return false
+}
+
+func zipFile(_ url: URL) -> Bool {
+    do {
+        let zipDest = url
+            .deletingLastPathComponent()
+            .appendingPathComponent(url.lastPathComponent + ".zip")
+        try FileManager.default.zipItem(at: url, to: zipDest, shouldKeepParent: true)
+        return true
+    } catch {
+        print("[!] failed to zip file: \(error)")
+    }
+    return false
+}
+
+func unzipFile(_ url: URL) -> Bool {
+    do {
+        let unzipDest = url.deletingLastPathComponent()
+        try fm.createDirectory(at: unzipDest, withIntermediateDirectories: true)
+        try fm.unzipItem(at: url, to: unzipDest)
+        return true
+    } catch {
+        print("[!] failed to uncompress file: \(error)")
+    }
+    return false
+}
+
+func duplicateFile(_ url: URL) -> Bool {
+    do {
+        let targetURL = {
+            if url.pathExtension == "" {
+                return url
+                    .deletingLastPathComponent()
+                    .appendingPathComponent("\(url.deletingPathExtension().lastPathComponent)_copy")
+            }
+            return url
+                .deletingLastPathComponent()
+                .appendingPathComponent("\(url.deletingPathExtension().lastPathComponent)_copy.\(url.pathExtension)")
+        }()
+        let data = try Data(contentsOf: url)
+        try data.write(to: targetURL)
+        return true
+    } catch {
+        print("[!] failed to duplicate file: \(error)")
+    }
+    return false
+}
+
+func copyFileToClipboard(_ url: URL) -> Bool {
+    do {
+        guard let tempURL = makeTemp(url) else {
+            throw "failed to make temp!"
+        }
+        let data = try Data(contentsOf: tempURL)
+        let utType = UTType(filenameExtension: tempURL.pathExtension) ?? .data
+        
+        UIPasteboard.general.setData(data, forPasteboardType: utType.identifier)
+        return true
+    } catch {
+        print("[!] failed to copy file: \(error)")
+    }
+    return false
+}
+
+func conformsToPlistViewer(_ url: URL) -> Bool {
+    do {
+        guard let data = try? Data(contentsOf: url) else { return false }
+        let _ = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String : Any]
+        return true
+    } catch {
+        return false
+    }
+}
+
+func conformsToTextViewer(_ url: URL) -> Bool {
+    do {
+        let _ = try String(contentsOf: url, encoding: .utf8)
+        return true
+    } catch {
+        return false
+    }
 }

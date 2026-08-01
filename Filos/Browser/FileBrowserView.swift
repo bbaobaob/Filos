@@ -69,13 +69,8 @@ struct FileBrowserView: View {
     var body: some View {
         List {
             ForEach(dirFiles) { file in
-                if file.type == .folder || file.type == .symlink {
-                    Button {
-                        mgr.push(file.type == .symlink ? file.symURL : file.url)
-                    } label: {
-                        FolderRow(file: file)
-                    }
-                    .foregroundStyle(Color(.label))
+                if file.type == .folder {
+                    FolderRow(file: file)
                 } else {
                     FileRow(file: file)
                 }

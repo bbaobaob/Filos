@@ -20,54 +20,117 @@ struct FileRow: View {
     @State private var previewURL: URL?
     @State private var fileInfo: FileInfoProperties = FileInfoProperties(fileExists: false, kind: "", uttype: "", size: 0, created: "", modified: "", isSymlink: false, posixPerms: "", owner: "", group: "", readable: false, writable: false, executable: false)
     
+    @State private var conformsText = false
+    @State private var conformsPlist = false
+    @State private var conformsZip = false
+    
     @State private var showInfo = false
     @State private var showPlistViewer = false
     @State private var showTextViewer = false
     
     var body: some View {
-        Button {
-            if isPlist() {
-                showPlistViewer.toggle()
-            } else if isText() {
-                showTextViewer.toggle()
+        Group {
+            if file.type == .file {
+                Button {
+                    if conformsZip {
+                        let res = unzipFile(file.url)
+                        if res {
+                            mgr.refreshFiles.toggle()
+                        } else {
+                            Haptic.shared.play(.heavy)
+                        }
+                    } else {
+                        if conformsPlist {
+                            showPlistViewer.toggle()
+                        } else if conformsText {
+                            showTextViewer.toggle()
+                        } else {
+                            previewURL = file.url
+                        }
+                    }
+                } label: {
+                    HStack(spacing: isSolariumUI() ? 12 : 10) {
+                        Image(systemName: "doc")
+                            .frame(width: 20, alignment: .center)
+                            .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
+                        
+                        VStack(alignment: .leading) {
+                            Text(file.name)
+                                .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            if !fileInfo.modified.isEmpty && file.type == .file {
+                                Text(fileInfo.modified)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        
+                        if file.type == .file {
+                            Text("\(ByteCountFormatter.string(fromByteCount: Int64(file.size), countStyle: .file))")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        
+                        Button {
+                            showInfo.toggle()
+                        } label: {
+                            Image(systemName: "info.circle")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.vertical, !fileInfo.modified.isEmpty && file.type == .file && !isSolariumUI() ? 1 : 0)
+                }
             } else {
-                previewURL = file.url
-            }
-        } label: {
-            HStack(spacing: isSolariumUI() ? 12 : 10) {
-                Image(systemName: "doc")
-                    .frame(width: 20, alignment: .center)
-                    .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
-                
-                VStack(alignment: .leading) {
-                    Text(file.name)
-                        .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    if !fileInfo.modified.isEmpty {
-                        Text(fileInfo.modified)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                Button {
+                    mgr.push(file.symURL)
+                } label: {
+                    HStack(spacing: isSolariumUI() ? 12 : 10) {
+                        Image(systemName: "arrow.up.right.circle")
+                            .frame(width: 20, alignment: .center)
+                            .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
+                        
+                        Text(file.name)
+                            .foregroundStyle(file.name.starts(with: ".") ? .secondary : .primary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        
+                        Button {
+                            showInfo.toggle()
+                        } label: {
+                            Image(systemName: "info.circle")
+                        }
+                        .buttonStyle(.plain)
+                        
+                        Chevron()
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                
-                Text("\(ByteCountFormatter.string(fromByteCount: Int64(file.size), countStyle: .file))")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                
-                Button {
-                    showInfo.toggle()
-                } label: {
-                    Image(systemName: "info.circle")
-                }
-                .buttonStyle(.plain)
             }
-            .padding(.vertical, !fileInfo.modified.isEmpty && file.type == .file && !isSolariumUI() ? 1 : 0)
         }
         .foregroundStyle(Color(.label))
+        .onAppear {
+            fileInfo = getFileInfo(file.url)
+            conformsText = conformsToTextViewer(file.url)
+            conformsPlist = conformsToPlistViewer(file.url)
+            if let type = UTType(fileInfo.uttype), type.conforms(to: .zip) {
+                conformsZip = true
+            }
+        }
+        .sheet(isPresented: $showInfo) {
+            InfoViewer(file)
+        }
+        .sheet(isPresented: $showPlistViewer) {
+            PlistViewer(file.url)
+        }
+        .sheet(isPresented: $showTextViewer) {
+            TextViewer(file.url)
+        }
+        .quickLookPreview($previewURL)
+        // MARK: cell actions
         .contextMenu {
-            if isText() || isPlist() {
+            if conformsText || conformsPlist {
                 Menu {
                     Button {
                         previewURL = file.url
@@ -75,7 +138,7 @@ struct FileRow: View {
                         Label("Quick Look", systemImage: "eye")
                     }
                     
-                    if isPlist() {
+                    if conformsPlist {
                         Button {
                             showPlistViewer.toggle()
                         } label: {
@@ -83,7 +146,7 @@ struct FileRow: View {
                         }
                     }
                     
-                    if isText() || isPlist() {
+                    if conformsText {
                         Button {
                             showTextViewer.toggle()
                         } label: {
@@ -109,84 +172,60 @@ struct FileRow: View {
                 Label("Get Info", systemImage: "info.circle")
             }
             
-            Button {
-                Alertinator.shared.prompt(title: "What would you like to call this file?", placeholder: file.name, completion: { result in
-                    if let name = result {
-                        do {
-                            let data = try Data(contentsOf: file.url)
-                            try fm.removeItem(at: file.url)
-                            let targetURL = file.url.deletingLastPathComponent().appendingPathComponent(name)
-                            try data.write(to: targetURL)
-                            mgr.refreshFiles.toggle()
-                        } catch {
-                            print("[!] failed to rename file: \(error)")
-                            Alertinator.shared.alert(title: "Failed to rename file!", body: "Check error logs for more detailed information.")
+            if file.type == .file {
+                Button {
+                    Alertinator.shared.prompt(title: "What would you like to call this file?", placeholder: file.name, completion: { result in
+                        if let name = result {
+                            let res = renameFile(file.url, to: name)
+                            if res {
+                                mgr.refreshFiles.toggle()
+                            } else {
+                                Alertinator.shared.alert(title: "Failed to rename file!", body: Errors.checkLogs)
+                            }
                         }
-                    }
-                })
-            } label: {
-                Label("Rename", systemImage: "pencil")
-            }
-            
-            
-            if let type = UTType(fileInfo.uttype), type.conforms(to: .zip) {
-                Button {
-                    do {
-                        let destination = file.url.deletingPathExtension()
-
-                        try FileManager.default.createDirectory(
-                            at: destination,
-                            withIntermediateDirectories: true
-                        )
-
-                        try FileManager.default.unzipItem(
-                            at: file.url,
-                            to: destination
-                        )
-                        
-                        mgr.refreshFiles.toggle()
-                    } catch {
-                        print("[!] failed to uncompress: \(error)")
-                        Alertinator.shared.alert(title: "Failed to uncompress file!", body: "Check error logs for more detailed information.")
-                    }
+                    })
                 } label: {
-                    Label("Uncompress", systemImage: "archivebox")
-                }
-            } else {
-                Button {
-                    do {
-                        let destination = file.url
-                            .deletingLastPathComponent()
-                            .appendingPathComponent(file.url.lastPathComponent + ".zip")
-
-                        try FileManager.default.zipItem(
-                            at: file.url,
-                            to: destination,
-                            shouldKeepParent: true
-                        )
-
-                        mgr.refreshFiles.toggle()
-                    } catch {
-                        print("[!] failed to compress: \(error)")
-                        Alertinator.shared.alert(title: "Failed to compress file!", body: "Check error logs for more detailed information.")
-                    }
-                } label: {
-                    Label("Compress", systemImage: "archivebox")
+                    Label("Rename", systemImage: "pencil")
                 }
             }
             
-            Button {
-                do {
-                    let targetURL = file.url.deletingLastPathComponent().appendingPathComponent("\(file.url.deletingPathExtension().lastPathComponent)_copy.\(file.url.pathExtension)")
-                    let data = try Data(contentsOf: file.url)
-                    try data.write(to: targetURL)
-                    mgr.refreshFiles.toggle()
-                } catch {
-                    print("[!] failed to duplicate file: \(error)")
-                    Alertinator.shared.alert(title: "Failed to duplicate file!", body: "Check error logs for more detailed information.")
+            if file.type == .file {
+                if conformsZip {
+                    Button {
+                        let res = unzipFile(file.url)
+                        if res {
+                            mgr.refreshFiles.toggle()
+                        } else {
+                            Alertinator.shared.alert(title: "Failed to uncompress file!", body: Errors.checkLogs)
+                        }
+                    } label: {
+                        Label("Uncompress", systemImage: "archivebox")
+                    }
+                } else {
+                    Button {
+                        let res = zipFile(file.url)
+                        if res {
+                            mgr.refreshFiles.toggle()
+                        } else {
+                            Alertinator.shared.alert(title: "Failed to compress file!", body: Errors.checkLogs)
+                        }
+                    } label: {
+                        Label("Compress", systemImage: "archivebox")
+                    }
                 }
-            } label: {
-                Label("Duplicate", systemImage: "plus.square.on.square")
+            }
+            
+            if file.type == .file {
+                Button {
+                    let res = duplicateFile(file.url)
+                    if res {
+                        mgr.refreshFiles.toggle()
+                    } else {
+                        Alertinator.shared.alert(title: "Failed to duplicate file!", body: Errors.checkLogs)
+                    }
+                } label: {
+                    Label("Duplicate", systemImage: "plus.square.on.square")
+                }
             }
             
             if !hideFavs {
@@ -210,14 +249,9 @@ struct FileRow: View {
             Divider()
             
             Button {
-                do {
-                    let data = try Data(contentsOf: file.url)
-                    let utType = UTType(filenameExtension: file.url.pathExtension) ?? .data
-                    
-                    UIPasteboard.general.setData(data, forPasteboardType: utType.identifier)
-                    UIPasteboard.general.string = file.url.path
-                } catch {
-                    print("(fm) failed to copy file: \(error)")
+                let res = copyFileToClipboard(file.url)
+                if !res {
+                    Alertinator.shared.alert(title: "Failed to copy file!", body: Errors.checkLogs)
                 }
             } label: {
                 Label("Copy", systemImage: "doc.on.doc")
@@ -236,46 +270,14 @@ struct FileRow: View {
             Button(role: .destructive) {
                 do {
                     try fm.removeItem(at: file.url)
+                    mgr.refreshFiles.toggle()
                 } catch {
-                    print("(fm) failed to delete file: \(error)")
-                    Alertinator.shared.alert(title: "Failed to delete file!", body: "\(error)")
+                    print("[!] failed to delete file: \(error)")
+                    Alertinator.shared.alert(title: "Failed to delete file!", body: Errors.checkLogs)
                 }
-                mgr.refreshFiles.toggle()
             } label: {
                 Label("Delete", systemImage: "trash")
             }
-        }
-        .onAppear {
-            fileInfo = getFileInfo(file.url)
-        }
-        .sheet(isPresented: $showInfo) {
-            InfoViewer(file)
-        }
-        .sheet(isPresented: $showPlistViewer) {
-            PlistViewer(file.url)
-        }
-        .sheet(isPresented: $showTextViewer) {
-            TextViewer(file.url)
-        }
-        .quickLookPreview($previewURL)
-    }
-    
-    private func isPlist() -> Bool {
-        do {
-            guard let data = try? Data(contentsOf: file.url) else { return false }
-            let _ = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String : Any]
-            return true
-        } catch {
-            return false
-        }
-    }
-    
-    private func isText() -> Bool {
-        do {
-            let _ = try String(contentsOf: file.url, encoding: .utf8)
-            return true
-        } catch {
-            return false
         }
     }
 }
