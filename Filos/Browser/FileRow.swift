@@ -79,7 +79,7 @@ struct FileRow: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    .padding(.vertical, !hideDates && file.modifiedDateStr.isEmpty && file.type == .file && !isSolariumUI() ? 1 : 0)
+                    .padding(.vertical, !hideDates && !file.modifiedDateStr.isEmpty && file.type == .file && !isSolariumUI() ? 1 : 0)
                 }
             } else {
                 Button {

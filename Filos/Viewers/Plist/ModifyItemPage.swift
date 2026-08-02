@@ -39,7 +39,7 @@ struct ModifyItemPage: View {
                 switch item.type {
                 case .dict, .array:
                     Button("Add Item") {
-                        item.dictVal[0] = PlistItem(key: "New Item", value: "")
+                        item.dictVal.insert(PlistItem(key: "New Item", value: ""), at: 0)
                     }
                     .disabled(!isEditing)
                     ForEach(item.dictVal.sorted(by: { $0.key < $1.key })) { nestItem in
@@ -59,6 +59,8 @@ struct ModifyItemPage: View {
                     TextEditor(text: $item.stringVal)
                         .frame(height: 400)
                         .disabled(!isEditing)
+                case .bool:
+                    Toggle(item.boolVal.description.uppercased(), isOn: $item.boolVal)
                 default:
                     TextField(item.type.label, text: $item.stringVal)
                         .disabled(!isEditing)

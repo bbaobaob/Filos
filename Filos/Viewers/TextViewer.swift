@@ -12,6 +12,9 @@ struct TextViewer: View {
     @EnvironmentObject var mgr: FilosManager
     @Environment(\.dismiss) var dismiss
     
+    @AppStorage("textViewerSize") var textViewerSize = 0
+    @AppStorage("useMonospaced") var useMonospaced = true
+    
     var fileURL: URL
     
     @State private var fileText = ""
@@ -28,10 +31,10 @@ struct TextViewer: View {
                 VStack(alignment: .leading) {
                     if isEditing {
                         TextEditor(text: $editText)
-                            .font(.system(size: 10, design: .monospaced))
+                            .font(.system(size: CGFloat(textViewerSize), design: useMonospaced ? .monospaced : .default))
                     } else {
                         Text(fileText)
-                            .font(.system(size: 10, design: .monospaced))
+                            .font(.system(size: CGFloat(textViewerSize), design: useMonospaced ? .monospaced : .default))
                             .padding(5)
                     }
                 }

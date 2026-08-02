@@ -30,12 +30,6 @@ struct PlistViewer: View {
             .navigationTitle(fileURL.lastPathComponent)
             .navigationBarTitleDisplayMode(.inline)
             .listStyle(.insetGrouped)
-            .onAppear {
-                let res = pmgr.loadPlistItems()
-                if !res {
-                    Alertinator.shared.alert(title: "Failed to load plist!", body: "Check error logs for more detailed information.")
-                }
-            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
@@ -55,6 +49,12 @@ struct PlistViewer: View {
                         ToolbarLabel("Close", icon: "xmark")
                     }
                 }
+            }
+        }
+        .onAppear {
+            let res = pmgr.loadPlistItems()
+            if !res {
+                Alertinator.shared.alert(title: "Failed to load plist!", body: "Check error logs for more detailed information.")
             }
         }
         .navigationViewStyle(.stack)

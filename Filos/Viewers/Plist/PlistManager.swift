@@ -39,11 +39,11 @@ final class PlistManager: ObservableObject {
     init() {}
     
     func loadPlistItems() -> Bool {
-        plistArray = []
+        plistArray = [PlistItem(key: "Root", value: [], isExpanded: true)]
         if let rawDict = getFileDict(url) {
             for key in rawDict.keys {
                 if let value = rawDict[key] {
-                    plistArray.append(PlistItem(key: key, value: value))
+                    plistArray[0].dictVal.append(PlistItem(key: key, value: value))
                 }
             }
             return true
@@ -70,7 +70,7 @@ final class PlistManager: ObservableObject {
         
         var dictToWrite: [String : Any] = [:]
         
-        for item in plistArray {
+        for item in plistArray[0].dictVal {
             dictToWrite[item.key] = item.getRawValue()
         }
     
@@ -111,6 +111,20 @@ final class PlistManager: ObservableObject {
         }
         return false
     }
+    
+    func toggleIsExpanded(items: inout [PlistItem], target: PlistItem) -> Bool {
+        for item in items.indices {
+            if items[item].key == target.key {
+                items[item].isExpanded.toggle()
+                return true
+            }
+            
+            if toggleIsExpanded(items: &items[item].dictVal, target: target) {
+                return true
+            }
+        }
+        return false
+    }
 }
 
 struct PlistItem: Identifiable {
@@ -119,14 +133,16 @@ struct PlistItem: Identifiable {
     var rawVal: Any?
     var type: PlistItemType = .unknown
     var index: Int?
+    var isExpanded: Bool
     
     var stringVal: String = ""
     var boolVal: Bool = false
     var dictVal: [PlistItem] = []
     
-    init(key: String, value: Any) {
+    init(key: String, value: Any, isExpanded: Bool = false) {
         self.key = key
         self.rawVal = value
+        self.isExpanded = isExpanded
         self.type = getType()
         
         switch rawVal {

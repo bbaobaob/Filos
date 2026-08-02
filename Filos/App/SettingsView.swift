@@ -18,6 +18,9 @@ struct SettingsView: View {
     @AppStorage("hideFavs") var hideFavs = false
     @AppStorage("hideDates") var hideDates = false
     
+    @AppStorage("textViewerSize") var textViewerSize = 10
+    @AppStorage("useMonospaced") var useMonospaced = true
+    
     var body: some View {
         NavigationView {
             List {
@@ -79,6 +82,19 @@ struct SettingsView: View {
                     Toggle("Hide dates in listed items", isOn: $hideDates)
                 } header: {
                     HeaderLabel(text: "View Options", icon: "eye")
+                }
+                
+                Section {
+                    Stepper(value: $textViewerSize) {
+                        HStack {
+                            Text("Text Size")
+                            Spacer()
+                            Text(textViewerSize.description)
+                        }
+                    }
+                    Toggle("Use monospaced font", isOn: $useMonospaced)
+                } header: {
+                    HeaderLabel(text: "Text Viewer", icon: "doc.plaintext")
                 }
             }
             .navigationTitle("Settings")

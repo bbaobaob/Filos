@@ -12,16 +12,20 @@ struct ItemRow: View {
     var item: PlistItem
     let hierarchy: Int
     
-    @State private var showNest = false
-    
     var body: some View {
         Group {
             if item.type == .dict || item.type == .array || item.type == .data {
                 HStack {
                     Text(item.key)
+                        .overlay {
+                            NavigationLink(destination: ModifyItemPage(item: item).environmentObject(pmgr)) {
+                                EmptyView()
+                            }
+                            .opacity(0)
+                        }
                     Spacer()
                     Button {
-                        showNest.toggle()
+                       let _ = pmgr.toggleIsExpanded(items: &pmgr.plistArray, target: item)
                     } label: {
                         HStack {
                             Text(item.type.label)
@@ -29,14 +33,15 @@ struct ItemRow: View {
                                 .font(.body.weight(.semibold))
                                 .imageScale(.small)
                                 .frame(width: 24, height: 24, alignment: .center)
-                                .rotationEffect(.degrees(showNest ? 0 : -90))
-                                .animation(.easeInOut(duration: 0.2), value: showNest)
+                                .rotationEffect(.degrees(item.isExpanded ? 0 : -90))
+                                .animation(.easeInOut(duration: 0.2), value: item.isExpanded)
                         }
                     }
+                    .buttonStyle(.plain)
                 }
                 .listRowBackground(Color(uiColor: .hierarchyLevelColor(hierarchy)))
                 // dictionary inception time
-                if showNest {
+                if item.isExpanded {
                     if item.type == .data {
                         Text(item.stringVal)
                             .font(.system(size: 10, design: .monospaced))
@@ -53,15 +58,14 @@ struct ItemRow: View {
                         Text(item.key)
                         Spacer()
                         Text(item.stringVal)
+                            .lineLimit(1)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .listRowBackground(Color(uiColor: .hierarchyLevelColor(hierarchy)))
             }
         }
         .contextMenu {
-            NavigationLink(destination: ModifyItemPage(item: item).environmentObject(pmgr)) {
-                Label("Modify Value", systemImage: "pencil")
-            }
             Menu {
                 Button("Key") {
                     UIPasteboard.general.string = item.key
