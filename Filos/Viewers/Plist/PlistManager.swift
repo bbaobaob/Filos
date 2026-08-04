@@ -186,7 +186,8 @@ struct PlistItem: Identifiable {
         case .int: return Int(stringVal) ?? 0
         case .double: return Double(stringVal) ?? 0
         case .bool: return boolVal
-        case .data: return Data(stringVal.utf8)
+        // case .data: return Data(stringVal.utf8)
+        case .data: return rawVal ?? Data()
         case .dict:
             var rawDict = [String : Any]()
             for item in dictVal {
@@ -199,7 +200,7 @@ struct PlistItem: Identifiable {
                 rawArray.append(item.getRawValue())
             }
             return rawArray
-        case .unknown: return ""
+        case .unknown: return rawVal ?? ""
         }
     }
 }

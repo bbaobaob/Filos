@@ -56,9 +56,12 @@ struct ModifyItemPage: View {
                             }
                     }
                 case .data:
+                    Text(item.stringVal)
+                    /*
                     TextEditor(text: $item.stringVal)
                         .frame(height: 400)
-                        .disabled(!isEditing)
+                        .disabled(true)
+                     */
                 case .bool:
                     Toggle(item.boolVal.description.uppercased(), isOn: $item.boolVal)
                 default:
@@ -93,8 +96,7 @@ struct ModifyItemPage: View {
                         item = pmgr.plistArray.first(where: { $0.id == item.id }) ?? item
                         isEditing = false
                     } label: {
-                        Label("Cancel", systemImage: "xmark")
-                            .labelStyle(.iconOnly)
+                        ToolbarLabel("Cancel", icon: "xmark")
                     }
                 }
             }
@@ -110,14 +112,13 @@ struct ModifyItemPage: View {
                         }
                         isEditing = false
                     } label: {
-                        Label("Apply", systemImage: "checkmark")
+                        ToolbarLabel("Save", icon: "checkmark")
                     }
                 } else {
                     Button {
                         isEditing = true
                     } label: {
-                        Label("Edit", systemImage: "pencil")
-                            .labelStyle(.iconOnly)
+                        ToolbarLabel("Edit", icon: "pencil")
                     }
                 }
             }

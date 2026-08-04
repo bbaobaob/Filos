@@ -29,7 +29,7 @@ struct PlistViewer: View {
             }
             .navigationTitle(fileURL.lastPathComponent)
             .navigationBarTitleDisplayMode(.inline)
-            .listStyle(.insetGrouped)
+            .listStyle(.inset)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
@@ -61,28 +61,43 @@ struct PlistViewer: View {
     }
 }
 
+#Preview {
+    PlistViewer(URL(fileURLWithPath: "/Users/liquidglass/Desktop/com.apple.MobileGestalt.plist"))
+        .environmentObject(PlistManager())
+}
+
+// no comment.
 extension UIColor {
     static func hierarchyLevelColor(_ level: Int = 0) -> UIColor {
         UIColor { trait in
-            let baseColor = UIColor.secondarySystemBackground.resolvedColor(with: trait)
+            let isDark = (trait.userInterfaceStyle == .dark)
+            let baseColor = isDark ? UIColor.secondarySystemBackground.resolvedColor(with: trait) : UIColor.white.resolvedColor(with: trait)
             
-            var r: CGFloat = 0
-            var g: CGFloat = 0
+            let clampedLevel = max(0, level)
+            var factor = max(0, 1 - 0.03 * CGFloat(clampedLevel))
+            if isDark {
+                factor = max(0, 1 + 0.24 * CGFloat(clampedLevel))
+            }
+
+            var h: CGFloat = 0
+            var s: CGFloat = 0
             var b: CGFloat = 0
             var a: CGFloat = 0
-            
-            // get rgba values from base color
-            guard baseColor.getRed(&r, green: &g, blue: &b, alpha: &a) else {
+
+            if baseColor.getHue(&h, saturation: &s, brightness: &b, alpha: &a) {
+                let newBrightness = max(0, min(1, b * factor))
+                return UIColor(hue: h, saturation: s, brightness: newBrightness, alpha: a)
+            }
+
+            var r: CGFloat = 0
+            var g: CGFloat = 0
+            var bl: CGFloat = 0
+
+            guard baseColor.getRed(&r, green: &g, blue: &bl, alpha: &a) else {
                 return baseColor
             }
-            
-            // set amount + curve colors
-            let curve: CGFloat = 0.04 * CGFloat(level)
-            r = min(r + (1 - r) * curve, 1)
-            g = min(g + (1 - g) * curve, 1)
-            b = min(b + (1 - b) * curve, 1)
-            
-            return UIColor(red: r, green: g, blue: b, alpha: a)
+
+            return UIColor(red: max(0, r * factor), green: max(0, g * factor), blue: max(0, bl * factor), alpha: a)
         }
     }
 }
