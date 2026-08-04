@@ -22,7 +22,7 @@ struct PlistViewer: View {
     var body: some View {
         NavigationView {
             List {
-                ForEach(pmgr.plistArray.sorted(by: { $0.key < $1.key })) { item in
+                ForEach(pmgr.plistArray) { item in
                     ItemRow(item: item, hierarchy: 0)
                         .environmentObject(pmgr)
                 }

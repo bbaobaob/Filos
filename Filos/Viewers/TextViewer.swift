@@ -51,8 +51,7 @@ struct TextViewer: View {
                             isEditing = false
                             editText = fileText
                         } label: {
-                            Label("Cancel", systemImage: "xmark")
-                                .labelStyle(.iconOnly)
+                            ToolbarLabel("Cancel", icon: "xmark")
                         }
                     }
                     
@@ -94,8 +93,7 @@ struct TextViewer: View {
                                 fileText = getFileText(fileURL)
                             }
                         } label: {
-                            Label("Confirm", systemImage: "checkmark")
-                                .labelStyle(.iconOnly)
+                            ToolbarLabel("Save", icon: "checkmark")
                         }
                     } else {
                         Button {

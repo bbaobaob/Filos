@@ -25,7 +25,7 @@ struct SettingsView: View {
         NavigationView {
             List {
                 Section {
-                    AppInfoCell(build: "Beta 3")
+                    AppInfoCell(build: "Release")
                     NavigationLink("Credits") {
                         List {
                             LinkCreditCell(image: Image("lunginspector"), name: "lunginspector", description: "Primary developer.", url: "https://github.com/lunginspector")

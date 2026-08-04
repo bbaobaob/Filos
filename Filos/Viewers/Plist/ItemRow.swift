@@ -58,7 +58,7 @@ struct ItemRow: View {
                                 .opacity(0)
                             }
                     } else {
-                        ForEach(item.dictVal.sorted(by: { $0.key < $1.key })) { item in
+                        ForEach(item.dictVal) { item in
                             ItemRow(item: item, hierarchy: hierarchy + 1).environmentObject(pmgr)
                         }
                     }

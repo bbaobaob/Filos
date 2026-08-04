@@ -154,7 +154,7 @@ struct PlistItem: Identifiable {
         case let v as [String : Any]:
             self.dictVal = v.map {
                 PlistItem(key: $0.key, value: $0.value)
-            }
+            }.sorted(by: { $0.key < $1.key })
             self.stringVal = v.description
         case let v as [Any]:
             self.dictVal = v.enumerated().map { index, value in

@@ -42,7 +42,7 @@ struct ModifyItemPage: View {
                         item.dictVal.insert(PlistItem(key: "New Item", value: ""), at: 0)
                     }
                     .disabled(!isEditing)
-                    ForEach(item.dictVal.sorted(by: { $0.key < $1.key })) { nestItem in
+                    ForEach(item.dictVal) { nestItem in
                         ItemRow(item: nestItem, hierarchy: 0).environmentObject(pmgr)
                             .disabled(isEditing && nestItem.key == "New Item")
                             .swipeActions {
