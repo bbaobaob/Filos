@@ -7,6 +7,9 @@
 
 import SwiftUI
 
+// really do not like this one.
+// it sometimes will do very weird things such as jump back to the previous page if you're moving too quickly.
+// thanks ios 15 and not having NavigationStack.
 struct ContentView: View {
     @EnvironmentObject var mgr: FilosManager
     

@@ -16,32 +16,34 @@ struct ItemRow: View {
         Group {
             if item.type == .dict || item.type == .array || item.type == .data {
                 HStack {
-                    Text(item.key)
-                        .lineLimit(1)
+                    Button {
+                        // BROKEN: for some reason this doesn't work if ItemRow is shown from a ModifyItemPage. not too certain why.
+                        let _ = pmgr.toggleIsExpanded(items: &pmgr.plistArray, target: item)
+                    } label: {
+                        HStack {
+                            Image(systemName: "chevron.down")
+                                .font(.body.weight(.semibold))
+                                .imageScale(.small)
+                                .rotationEffect(.degrees(item.isExpanded ? 0 : -90))
+                                .animation(.easeInOut(duration: 0.2), value: item.isExpanded)
+                            Text(item.key)
+                                .lineLimit(1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                    if item.type != .data {
+                        Text("\(item.type.label) (\(item.dictVal.count.description))")
+                    } else {
+                        Text(item.type.label)
+                    }
+                    Image(systemName: "info.circle")
                         .overlay {
                             NavigationLink(destination: ModifyItemPage(item: item).environmentObject(pmgr)) {
                                 EmptyView()
                             }
                             .opacity(0)
                         }
-                    Spacer()
-                    Button {
-                       let _ = pmgr.toggleIsExpanded(items: &pmgr.plistArray, target: item)
-                    } label: {
-                        HStack {
-                            if item.type != .data {
-                                Text("\(item.type.label) (\(item.dictVal.count.description))")
-                            } else {
-                                Text(item.type.label)
-                            }
-                            Image(systemName: "chevron.down")
-                                .font(.body.weight(.semibold))
-                                .imageScale(.small)
-                                .rotationEffect(.degrees(item.isExpanded ? 0 : -90))
-                                .animation(.easeInOut(duration: 0.2), value: item.isExpanded)
-                        }
-                    }
-                    .buttonStyle(.plain)
                 }
                 .listRowBackground(Color(uiColor: .hierarchyLevelColor(hierarchy)))
                 // dictionary inception time
@@ -60,6 +62,7 @@ struct ItemRow: View {
                     } else {
                         ForEach(item.dictVal) { item in
                             ItemRow(item: item, hierarchy: hierarchy + 1).environmentObject(pmgr)
+                                .environmentObject(pmgr)
                         }
                     }
                 }

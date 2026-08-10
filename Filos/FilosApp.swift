@@ -57,14 +57,12 @@ struct FilosApp: App {
                     print("[*] Running on \(UIDevice.current.systemName) \(UIDevice.current.systemVersion), \(machineName())")
                     
                     if consumeOnLaunch && !sbxToken.isEmpty {
-                        let res = sbxConsume(token: sbxToken)!
+                        mgr.tokenVaild = sbxConsume(sbxToken)
                         
-                        if res >= 1 {
+                        if mgr.tokenVaild {
                             print("[*] consumed=1, token valid!")
-                            mgr.tokenVaild = true
                         } else {
                             print("[!] consumed!=2, token invalid?")
-                            mgr.tokenVaild = false
                             Alertinator.shared.alert(title: "Failed to consume sandbox extension token!", body: "This token is likely invaild. Generate a new token, and put it in settings.")
                         }
                     }

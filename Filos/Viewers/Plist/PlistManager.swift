@@ -46,6 +46,7 @@ final class PlistManager: ObservableObject {
                     plistArray[0].dictVal.append(PlistItem(key: key, value: value))
                 }
             }
+            plistArray = plistArray.sorted(by: { $0.key < $1.key })
             return true
         } else {
             print("[!] failed to load plist as it seems like there was no passable dictionary?")
@@ -84,6 +85,7 @@ final class PlistManager: ObservableObject {
         return false
     }
     
+    // not a huge fan of any of this...
     func replacePlistItem(items: inout [PlistItem], newItem: PlistItem) -> Bool {
         for item in items.indices {
             if items[item].id == newItem.id {
@@ -114,7 +116,7 @@ final class PlistManager: ObservableObject {
     
     func toggleIsExpanded(items: inout [PlistItem], target: PlistItem) -> Bool {
         for item in items.indices {
-            if items[item].key == target.key {
+            if items[item].id == target.id {
                 items[item].isExpanded.toggle()
                 return true
             }

@@ -57,13 +57,8 @@ struct ModifyItemPage: View {
                     }
                 case .data:
                     Text(item.stringVal)
-                    /*
-                    TextEditor(text: $item.stringVal)
-                        .frame(height: 400)
-                        .disabled(true)
-                     */
                 case .bool:
-                    Toggle(item.boolVal.description.uppercased(), isOn: $item.boolVal)
+                    Toggle(item.boolVal.description.capitalized, isOn: $item.boolVal)
                 default:
                     TextField(item.type.label, text: $item.stringVal)
                         .disabled(!isEditing)
@@ -86,6 +81,7 @@ struct ModifyItemPage: View {
         .navigationTitle("\(item.key)")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(isEditing)
+        .listStyle(.grouped)
         .onAppear {
             item = pmgr.plistArray.first(where: { $0.id == item.id }) ?? item
         }

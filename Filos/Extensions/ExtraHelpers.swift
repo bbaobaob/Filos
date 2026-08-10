@@ -8,24 +8,27 @@
 import SwiftUI
 import PartyUI
 
-func sbxConsume(token: String) -> Int64? {
+// thanks to skadz108 for this helper.
+func sbxConsume(_ token: String) -> Bool {
     typealias sbxConsumeFunc = @convention(c) (UnsafePointer<CChar>?) -> Int64
     
     guard let sbxLib = dlopen("/usr/lib/system/libsystem_sandbox.dylib", RTLD_NOW) else {
-        return nil
+        return false
     }
     defer { dlclose(sbxLib) }
     
     guard let sbxConsumeSymbol = dlsym(sbxLib, "sandbox_extension_consume") else {
-        return nil
+        return false
     }
     
     let consume = unsafeBitCast(sbxConsumeSymbol, to: sbxConsumeFunc.self)
     
     let result = consume(token)
-    return result
+    if result >= 1 {
+        return true
+    }
+    return false
 }
-
 // make strings compatiable with errors
 extension String: @retroactive Error {}
 

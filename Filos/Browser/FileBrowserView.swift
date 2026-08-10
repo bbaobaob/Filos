@@ -156,6 +156,12 @@ struct FileBrowserView: View {
                     Divider()
                     
                     Button {
+                        showFavs.toggle()
+                    } label: {
+                        Label("Favorites", systemImage: "star")
+                    }
+                    
+                    Button {
                         Alertinator.shared.prompt(title: "Where would you like to go?", placeholder: path.path, completion: { path in
                             let path = generateNavPath(path: path ?? "")
                             
@@ -165,12 +171,6 @@ struct FileBrowserView: View {
                         })
                     } label: {
                         Label("Go to Directory...", systemImage: "arrow.right.arrow.left")
-                    }
-                    
-                    Button {
-                        showFavs.toggle()
-                    } label: {
-                        Label("Favorites", systemImage: "star")
                     }
                     
                     Divider()
