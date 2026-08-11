@@ -276,10 +276,13 @@ struct FileBrowserView: View {
         switch result {
         case .success(let fileURL):
             do {
-                guard fileURL.startAccessingSecurityScopedResource() else {
-                    throw "failed to access file!"
+                // gotta do this for the file picker to work properly
+                let stopAccess = fileURL.startAccessingSecurityScopedResource()
+                defer {
+                    if stopAccess {
+                        fileURL.stopAccessingSecurityScopedResource()
+                    }
                 }
-                defer { fileURL.stopAccessingSecurityScopedResource() }
                 
                 let data = try Data(contentsOf: fileURL)
                 
