@@ -40,12 +40,5 @@ final class FilosManager: ObservableObject {
 // ios 15 surprise!
 extension URL {
     static var temporaryDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
-    static var documentsDirectory: URL {
-        do {
-            let url = try fm.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
-            return url
-        } catch {
-            return URL(string: "")!
-        }
-    }
+    static var documentsDirectory: URL = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
 }

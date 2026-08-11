@@ -12,7 +12,8 @@ struct ModifyItemPage: View {
     @EnvironmentObject private var pmgr: PlistManager
     @Environment(\.dismiss) var dismiss
     
-    @State var item: PlistItem
+    @State var ogItem: PlistItem = PlistItem(key: "", value: "")
+    @Binding var item: PlistItem
     @State private var isEditing = false
     
     var body: some View {
@@ -42,8 +43,8 @@ struct ModifyItemPage: View {
                         item.dictVal.insert(PlistItem(key: "New Item", value: ""), at: 0)
                     }
                     .disabled(!isEditing)
-                    ForEach(item.dictVal) { nestItem in
-                        ItemRow(item: nestItem, hierarchy: 0).environmentObject(pmgr)
+                    ForEach($item.dictVal) { $nestItem in
+                        ItemRow(item: $nestItem, hierarchy: 0).environmentObject(pmgr)
                             .disabled(isEditing && nestItem.key == "New Item")
                             .swipeActions {
                                 if isEditing {
@@ -73,8 +74,12 @@ struct ModifyItemPage: View {
             
             if isEditing {
                 Button("Delete Item", role: .destructive) {
-                    let _ = pmgr.writePlistItems(delItem: item)
-                    dismiss()
+                    let res = pmgr.writePlistItems(delItem: item)
+                    if !res {
+                        Alertinator.shared.alert(title: "Failed to delete plist item!", body: Errors.checkLogs)
+                    } else {
+                        dismiss()
+                    }
                 }
             }
         }
@@ -83,13 +88,16 @@ struct ModifyItemPage: View {
         .navigationBarBackButtonHidden(isEditing)
         .listStyle(.grouped)
         .onAppear {
-            item = pmgr.plistArray.first(where: { $0.id == item.id }) ?? item
+            Task {
+                let plistItem = pmgr.plistArray.first(where: { $0.id == item.id }) ?? item
+                ogItem = plistItem
+            }
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 if isEditing {
                     Button {
-                        item = pmgr.plistArray.first(where: { $0.id == item.id }) ?? item
+                        item = ogItem
                         isEditing = false
                     } label: {
                         ToolbarLabel("Cancel", icon: "xmark")
@@ -105,16 +113,19 @@ struct ModifyItemPage: View {
                             Haptic.shared.play(.soft)
                         } else {
                             Alertinator.shared.alert(title: "Failed to write plist items!", body: "Check error logs for more detailed information.")
+                            item = ogItem
                         }
                         isEditing = false
                     } label: {
                         ToolbarLabel("Save", icon: "checkmark")
                     }
                 } else {
-                    Button {
-                        isEditing = true
-                    } label: {
-                        ToolbarLabel("Edit", icon: "pencil")
+                    if pmgr.isWritable {
+                        Button {
+                            isEditing = true
+                        } label: {
+                            ToolbarLabel("Edit", icon: "pencil")
+                        }
                     }
                 }
             }

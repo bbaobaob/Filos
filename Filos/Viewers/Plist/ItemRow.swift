@@ -9,7 +9,7 @@ import SwiftUI
 
 struct ItemRow: View {
     @EnvironmentObject private var pmgr: PlistManager
-    var item: PlistItem
+    @Binding var item: PlistItem
     let hierarchy: Int
     
     var body: some View {
@@ -17,8 +17,7 @@ struct ItemRow: View {
             if item.type == .dict || item.type == .array || item.type == .data {
                 HStack {
                     Button {
-                        // BROKEN: for some reason this doesn't work if ItemRow is shown from a ModifyItemPage. not too certain why.
-                        let _ = pmgr.toggleIsExpanded(items: &pmgr.plistArray, target: item)
+                        item.isExpanded.toggle()
                     } label: {
                         HStack {
                             Image(systemName: "chevron.down")
@@ -39,7 +38,7 @@ struct ItemRow: View {
                     }
                     Image(systemName: "info.circle")
                         .overlay {
-                            NavigationLink(destination: ModifyItemPage(item: item).environmentObject(pmgr)) {
+                            NavigationLink(destination: ModifyItemPage(item: $item).environmentObject(pmgr)) {
                                 EmptyView()
                             }
                             .opacity(0)
@@ -54,20 +53,20 @@ struct ItemRow: View {
                             .lineLimit(12)
                             .listRowBackground(Color(uiColor: .hierarchyLevelColor(hierarchy + 1)))
                             .overlay {
-                                NavigationLink(destination: ModifyItemPage(item: item).environmentObject(pmgr)) {
+                                NavigationLink(destination: ModifyItemPage(item: $item).environmentObject(pmgr)) {
                                     EmptyView()
                                 }
                                 .opacity(0)
                             }
                     } else {
-                        ForEach(item.dictVal) { item in
-                            ItemRow(item: item, hierarchy: hierarchy + 1).environmentObject(pmgr)
+                        ForEach($item.dictVal) { $item in
+                            ItemRow(item: $item, hierarchy: hierarchy + 1).environmentObject(pmgr)
                                 .environmentObject(pmgr)
                         }
                     }
                 }
             } else {
-                NavigationLink(destination: ModifyItemPage(item: item).environmentObject(pmgr)) {
+                NavigationLink(destination: ModifyItemPage(item: $item).environmentObject(pmgr)) {
                     HStack {
                         Text(item.key)
                             .lineLimit(1)

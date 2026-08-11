@@ -17,6 +17,7 @@ struct TextViewer: View {
     
     var fileURL: URL
     
+    @State private var file = clearFileItem
     @State private var fileText = ""
     @State private var editText = ""
     @State private var isEditing = false
@@ -44,6 +45,22 @@ struct TextViewer: View {
             .navigationTitle(fileURL.deletingPathExtension().lastPathComponent)
             .navigationBarTitleDisplayMode(.inline)
             .listStyle(.insetGrouped)
+            .safeAreaInset(edge: .bottom) {
+                if !file.writable {
+                    HStack {
+                        Spacer()
+                        Button {
+                            Alertinator.shared.alert(title: "View-Only File", body: "You can only read this file.")
+                        } label: {
+                            Image(systemName: "lock")
+                                .padding(10)
+                        }
+                        .foregroundStyle(.accent)
+                        .padding(.trailing)
+                        .ignoresSafeArea()
+                    }
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if isEditing {
@@ -56,7 +73,7 @@ struct TextViewer: View {
                     }
                     
                     Menu {
-                        if !isEditing {
+                        if file.writable && !isEditing {
                             Button {
                                 isEditing = true
                             } label: {

@@ -9,25 +9,13 @@ import SwiftUI
 import Combine
 
 /*
- gonna be building the plist plist editor ever in pure swift. i am totally cut out to do this job. anyways, here's the general premise:
- we interpret a plist as [String : Any] and convert it to our own format. this'll make actually editing it way easier, at the cost of it still fucking sucking.
+ i took on a bit of an ambitious goal: making a plist editor that works properly and has a bunch of features.
  
- PlistItem - a representation of an item inside of that plist
-    init(key: String, value: Any) - converts from [String : Any] to [PlistItem]
-    .getRawValue() - converts from [PlistItem] to Any
+ to actually get the data, i decided to cast the raw data from a plist as [String : Any], which is the usual swift format of plists. then, i converted [String : Any] into an array that contains my own custom item. it stores the key and the raw value, gets the type (getType()), converts the value into a boolean, string, and dictionary for editing, and then can be converted back into [String : Any] when calling getRawValue() on the plist item.
  
- plistArray - the source of truth for the plist that's being viewed or edited.
- loadPlistItems() - loads in plistDict.
- writePlistItem() - converts plistDict to [String : Any] and writes it.
+ for editing plists, i used a manager that stores the converted [PlistItem] array, and is binding throughout the views for viewing. however, for actually editing, i decided to manually edit instead of using bindings, as i had attempted to use a binding-based system to avoid wrappers, but it was incredibly unstable.
  
- these functions are lovely and all, but here's the part that's actually annoying: the user interface.
- now, you may be thinking: lunginpsector, you've been doing SwiftUI for at least a year now. you should be good at this.
- no i'm not.
- if anything i'm more proud of the backend over whatever the frontend is gonna look like.
- 
- here's my plan for the ui:
- Sheet -> PlistViewer (parent + NavigationStack): load plist using internal functions and then list out ItemRows for the whole dict. this means you can easily collapse/expand dictionary and array sections too.
-    ItemRow -> NavigationLink -> ModifyItemPage: it is VITAL that there's a source of truth that's binded to the original plist, and that we create a binding that writes back into plistArray. this also means that plistArray and the actual [String : Any] plist may become out of sync. it can't be that hard to avoid that though, right? can't be. you edit stringVal, boolVal, and dictVal, then when you're done editing, since that binding thingy is going to plistArray, just running pmgr.writePlistItems() should work. this means we'll have to have an observableobject. i'm good with those.
+ it's not the best editor in the world, and could definetely use some improvements and modifications, but it works pretty well for the time being and seems to be able to write to system plists without messing them up.
  */
 
 final class PlistManager: ObservableObject {
@@ -35,6 +23,7 @@ final class PlistManager: ObservableObject {
     
     @Published var plistArray: [PlistItem] = []
     @Published var url: URL = URL.documentsDirectory.appendingPathComponent("oops")
+    @Published var isWritable = false
     
     init() {}
     
@@ -108,20 +97,6 @@ final class PlistManager: ObservableObject {
             }
             
             if deletePlistItem(items: &items[item].dictVal, target: target) {
-                return true
-            }
-        }
-        return false
-    }
-    
-    func toggleIsExpanded(items: inout [PlistItem], target: PlistItem) -> Bool {
-        for item in items.indices {
-            if items[item].id == target.id {
-                items[item].isExpanded.toggle()
-                return true
-            }
-            
-            if toggleIsExpanded(items: &items[item].dictVal, target: target) {
                 return true
             }
         }

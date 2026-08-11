@@ -42,8 +42,6 @@ struct FileBrowserView: View {
     @State private var showSettings = false
     @State private var showFileImporter = false
     
-    @State private var shouldNav = false
-    
     var body: some View {
         List {
             ForEach(dirFiles) { file in
@@ -55,6 +53,7 @@ struct FileBrowserView: View {
             }
         }
         .navigationTitle(path.lastPathComponent)
+        .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -209,7 +208,9 @@ struct FileBrowserView: View {
             mgr.refreshFiles.toggle()
         }
         .onAppear {
-            loadFilesFromPath()
+            Task {
+                loadFilesFromPath()
+            }
         }
         .onChange(of: searchText) { newSearch in
             if newSearch.isEmpty {

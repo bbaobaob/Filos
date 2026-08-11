@@ -7,9 +7,6 @@
 
 import SwiftUI
 
-// really do not like this one.
-// it sometimes will do very weird things such as jump back to the previous page if you're moving too quickly.
-// thanks ios 15 and not having NavigationStack.
 struct ContentView: View {
     @EnvironmentObject var mgr: FilosManager
     
@@ -46,15 +43,16 @@ struct FileBrowserContainer: View {
             }
     }
     
-    @ViewBuilder
     private var destView: some View {
-        if mgr.navArray.count > level {
-            FileBrowserContainer(level: level + 1, url: mgr.navArray[level].url)
-        } else {
-            VStack {
-                HStack {
-                    ProgressView()
-                    Text("Loading...")
+        Group {
+            if mgr.navArray.count > level {
+                FileBrowserContainer(level: level + 1, url: mgr.navArray[level].url)
+            } else {
+                VStack {
+                    HStack {
+                        ProgressView()
+                        Text("Loading...")
+                    }
                 }
             }
         }

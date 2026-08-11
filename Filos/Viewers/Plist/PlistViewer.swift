@@ -13,27 +13,48 @@ struct PlistViewer: View {
     @Environment(\.dismiss) var dismiss
     
     var fileURL: URL
+    @State private var file = clearFileItem
+    @State private var showErrorView = false
     
     init(_ fileURL: URL) {
         self.fileURL = fileURL
-        pmgr.url = fileURL
     }
     
     var body: some View {
         NavigationView {
             List {
-                ForEach(pmgr.plistArray) { item in
-                    ItemRow(item: item, hierarchy: 0)
-                        .environmentObject(pmgr)
+                if showErrorView {
+                    PlainAlert(title: "Failed to load plist!", icon: "exclamationmark.triangle.fill", text: Errors.checkLogs, color: .yellow)
+                } else {
+                    ForEach($pmgr.plistArray) { $item in
+                        ItemRow(item: $item, hierarchy: 0)
+                            .environmentObject(pmgr)
+                    }
                 }
             }
-            .navigationTitle(fileURL.lastPathComponent)
+            .navigationTitle(file.fileURL.lastPathComponent)
             .navigationBarTitleDisplayMode(.inline)
             .listStyle(.inset)
+            .safeAreaInset(edge: .bottom) {
+                if !pmgr.isWritable {
+                    HStack {
+                        Spacer()
+                        Button {
+                            Alertinator.shared.alert(title: "View-Only File", body: "You can only read this file.")
+                        } label: {
+                            Image(systemName: "lock")
+                                .padding(10)
+                        }
+                        .foregroundStyle(.accent)
+                        .padding(.trailing)
+                        .ignoresSafeArea()
+                    }
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
-                        if let url = makeTemp(fileURL) {
+                        if let url = makeTemp(file.fileURL) {
                             presentShareSheet(with: url)
                         }
                     } label: {
@@ -52,18 +73,16 @@ struct PlistViewer: View {
             }
         }
         .onAppear {
+            pmgr.url = fileURL
+            file = getFileItem(at: fileURL)
             let res = pmgr.loadPlistItems()
             if !res {
-                Alertinator.shared.alert(title: "Failed to load plist!", body: "Check error logs for more detailed information.")
+                showErrorView = true
             }
+            pmgr.isWritable = file.writable
         }
         .navigationViewStyle(.stack)
     }
-}
-
-#Preview {
-    PlistViewer(URL(fileURLWithPath: "/Users/liquidglass/Desktop/com.apple.MobileGestalt.plist"))
-        .environmentObject(PlistManager())
 }
 
 // no comment.
