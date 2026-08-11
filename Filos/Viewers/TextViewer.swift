@@ -123,6 +123,7 @@ struct TextViewer: View {
                 }
             }
             .onAppear {
+                file = getFileItem(at: fileURL)
                 let text = getFileText(fileURL)
                 fileText = text
                 editText = text

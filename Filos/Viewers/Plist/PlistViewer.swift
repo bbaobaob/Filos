@@ -11,8 +11,8 @@ import PartyUI
 struct PlistViewer: View {
     @StateObject private var pmgr = PlistManager.shared
     @Environment(\.dismiss) var dismiss
-    
     var fileURL: URL
+    
     @State private var file = clearFileItem
     @State private var showErrorView = false
     

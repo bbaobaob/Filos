@@ -14,7 +14,6 @@ struct FolderRow: View {
     @EnvironmentObject var mgr: FilosManager
     @AppStorage("favList") var favList: [FavoriteItem] = []
     @AppStorage("hideFavs") var hideFavs = false
-    
     var file: FileItem
     
     @State private var previewURL: URL?

@@ -15,7 +15,6 @@ struct FileRow: View {
     @AppStorage("favList") var favList: [FavoriteItem] = []
     @AppStorage("hideFavs") var hideFavs = false
     @AppStorage("hideDates") var hideDates = false
-    
     var file: FileItem
     
     @State private var conformsText = false

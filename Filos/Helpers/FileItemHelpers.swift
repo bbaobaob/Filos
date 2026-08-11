@@ -83,7 +83,7 @@ func getFileItem(at url: URL) -> FileItem {
     return item
 }
 
-enum FileType {
+enum FileType: String {
     case file, folder, symlink
     
     var sortOrder: Int {

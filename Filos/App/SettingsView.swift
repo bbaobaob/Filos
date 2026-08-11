@@ -14,10 +14,10 @@ struct SettingsView: View {
     
     @AppStorage("sbxToken") var sbxToken = ""
     @AppStorage("consumeOnLaunch") var consumeOnLaunch = false
-    @AppStorage("plainList") var plainList = false
+    
+    @AppStorage("listStyle") var listStyle = 1
     @AppStorage("hideFavs") var hideFavs = false
     @AppStorage("hideDates") var hideDates = false
-    
     @AppStorage("textViewerSize") var textViewerSize = 10
     @AppStorage("useMonospaced") var useMonospaced = true
     
@@ -42,6 +42,9 @@ struct SettingsView: View {
                 
                 Section {
                     TextField("Token", text: $sbxToken)
+                        .onLongPressGesture {
+                            UIPasteboard.general.string = sbxToken
+                        }
                     HStack {
                         HStack {
                             Image(systemName: mgr.tokenVaild ? "checkmark.circle" : "xmark.circle")
@@ -66,18 +69,23 @@ struct SettingsView: View {
                             Button("Eject", role: .destructive) {
                                 sbxToken = ""
                                 mgr.tokenVaild = false
+                                Alertinator.shared.alert(title: "Token Ejected", body: "To reset file permissions, you'll have to restart the app. Would you like to exit now?", actionLabel: "Confirm", action: { exitinator() })
                             }
                         }
                     }
-                    Toggle("Consume on launch", isOn: $consumeOnLaunch)
+                    Toggle("Consume on Launch", isOn: $consumeOnLaunch)
                 } header: {
                     HeaderLabel(text: "Sandbox Extension Token", icon: "loupe")
                 }
                 
                 Section {
-                    Toggle("Plain list style", isOn: $plainList)
-                    Toggle("Hide \"Favorite\" button", isOn: $hideFavs)
-                    Toggle("Hide dates in listed items", isOn: $hideDates)
+                    Picker("List Style", selection: $listStyle) {
+                        Text("Default").tag(1)
+                        Text("Plain").tag(2)
+                        Text("Grouped").tag(3)
+                    }
+                    Toggle("Hide \"Favorite\" Button", isOn: $hideFavs)
+                    Toggle("Hide Dates", isOn: $hideDates)
                 } header: {
                     HeaderLabel(text: "View Options", icon: "eye")
                 }
@@ -90,7 +98,7 @@ struct SettingsView: View {
                             Text(textViewerSize.description)
                         }
                     }
-                    Toggle("Use monospaced font", isOn: $useMonospaced)
+                    Toggle("Monospaced Font", isOn: $useMonospaced)
                 } header: {
                     HeaderLabel(text: "Text Viewer", icon: "doc.plaintext")
                 }

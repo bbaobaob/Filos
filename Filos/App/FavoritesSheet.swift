@@ -18,9 +18,7 @@ struct FavoritesSheet: View {
     @EnvironmentObject private var mgr: FilosManager
     @Environment(\.dismiss) var dismiss
     
-    @AppStorage("favList") var favList: [FavoriteItem] = [
-        FavoriteItem(label: "Filos Documents", path: URL.documentsDirectory.path)
-    ]
+    @AppStorage("favList") var favList: [FavoriteItem] = []
     
     @State private var label = ""
     @State private var path = ""
@@ -127,6 +125,13 @@ struct FavoritesSheet: View {
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .topBarLeading) {
+                            Button {
+                                showAddSheet = false
+                            } label: {
+                                ToolbarLabel("Cancel", icon: "xmark")
+                            }
+                        }
+                        ToolbarItem(placement: .topBarTrailing) {
                             Button(role: .adaptiveConfirm) {
                                 if label.isEmpty || label.isEmpty || favList.compactMap({ $0.path }).contains(path) {
                                     Alertinator.shared.alert(title: "Invaild Favorite!", body: "Please make sure that you've typed in both the label and path fields, and that the path you put in is not the same as any paths currently added as favorites.")
@@ -136,14 +141,6 @@ struct FavoritesSheet: View {
                                 }
                             } label: {
                                 ToolbarLabel("Save", icon: "checkmark")
-                            }
-                        }
-                        
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button {
-                                showAddSheet = false
-                            } label: {
-                                ToolbarLabel("Cancel", icon: "xmark")
                             }
                         }
                     }

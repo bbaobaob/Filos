@@ -8,7 +8,7 @@
 import SwiftUI
 import PartyUI
 
-// thanks to skadz108 for this helper.
+// thanks to skadz108 for this helper
 func sbxConsume(_ token: String) -> Bool {
     typealias sbxConsumeFunc = @convention(c) (UnsafePointer<CChar>?) -> Int64
     
@@ -29,6 +29,7 @@ func sbxConsume(_ token: String) -> Bool {
     }
     return false
 }
+
 // make strings compatiable with errors
 extension String: @retroactive Error {}
 

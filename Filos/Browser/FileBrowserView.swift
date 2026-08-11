@@ -27,7 +27,6 @@ enum FileSortMode: String, CaseIterable, Codable, Hashable {
 
 struct FileBrowserView: View {
     @EnvironmentObject var mgr: FilosManager
-    
     @State var path: URL = URL(fileURLWithPath: "/")
     
     @State private var dirFiles: [FileItem] = []
@@ -35,7 +34,7 @@ struct FileBrowserView: View {
     @State private var searchText = ""
     @AppStorage("chosenSort") var chosenSort: FileSortMode = .system
     @AppStorage("filesAscend") var filesAscend: Bool = true
-    @AppStorage("plainList") var plainList = false
+    @AppStorage("listStyle") var listStyle = 1
     
     @State private var showFavs = false
     @State private var showLogs = false
@@ -54,6 +53,8 @@ struct FileBrowserView: View {
         }
         .navigationTitle(path.lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
+        .customListStyle(listStyle)
+        .adaptiveListMargin()
         .searchable(text: $searchText)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -92,7 +93,7 @@ struct FileBrowserView: View {
                 Menu {
                     Menu {
                         Button {
-                            Alertinator.shared.prompt(title: "Enter both the name and the extension you'd like to use to create this file.", placeholder: "new.txt", completion: { name in
+                            Alertinator.shared.prompt(title: "What would you like to call your new file? Make sure you attach an extension at the end.", placeholder: "new.txt", completion: { name in
                                 let name = name ?? ""
                                 if !name.isEmpty {
                                     do {
@@ -101,7 +102,7 @@ struct FileBrowserView: View {
                                         mgr.refreshFiles.toggle()
                                     } catch {
                                         print("(fm) failed to create file: \(error)")
-                                        Alertinator.shared.alert(title: "Failed to create file!", body: "\(error)")
+                                        Alertinator.shared.alert(title: "Failed to create file!", body: Errors.checkLogs)
                                     }
                                 }
                             })
@@ -110,7 +111,26 @@ struct FileBrowserView: View {
                         }
                         
                         Button {
-                            Alertinator.shared.prompt(title: "Enter a name for your new folder.", placeholder: "", completion: { name in
+                            Alertinator.shared.prompt(title: "What would you like to call your new property list?", placeholder: "Plist Name", completion: { name in
+                                let name = name ?? ""
+                                if !name.isEmpty {
+                                    do {
+                                        let fileURL = path.appendingPathComponent(name + ".plist")
+                                        let data = try PropertyListSerialization.data(fromPropertyList: NSMutableDictionary(), format: .xml, options: 0)
+                                        try data.write(to: fileURL)
+                                        mgr.refreshFiles.toggle()
+                                    } catch {
+                                        print("(fm) failed to create plist: \(error)")
+                                        Alertinator.shared.alert(title: "Failed to create property list!", body: Errors.checkLogs)
+                                    }
+                                }
+                            })
+                        } label: {
+                            Label("Property List", systemImage: "tablecells")
+                        }
+                        
+                        Button {
+                            Alertinator.shared.prompt(title: "What would you like to call your new folder?", placeholder: "Folder Name", completion: { name in
                                 let name = name ?? ""
                                 if !name.isEmpty {
                                     do {
@@ -118,7 +138,7 @@ struct FileBrowserView: View {
                                         mgr.refreshFiles.toggle()
                                     } catch {
                                         print("(fm) failed to create folder: \(error)")
-                                        Alertinator.shared.alert(title: "Failed to create directory!", body: "\(error)")
+                                        Alertinator.shared.alert(title: "Failed to create folder!", body: Errors.checkLogs)
                                     }
                                 }
                             })
@@ -127,7 +147,7 @@ struct FileBrowserView: View {
                         }
                         
                         Button {
-                            Alertinator.shared.prompt(title: "Enter the path you'd like your new symlink to point to.", placeholder: "/path/to/dir", completion: { symPath in
+                            Alertinator.shared.prompt(title: "Where would you like your new symlink to point to?", placeholder: "/path/to/dir", completion: { symPath in
                                 let symPath = symPath ?? ""
                                 if !symPath.isEmpty {
                                     do {
@@ -161,7 +181,7 @@ struct FileBrowserView: View {
                     }
                     
                     Button {
-                        Alertinator.shared.prompt(title: "Where would you like to go?", placeholder: path.path, completion: { path in
+                        Alertinator.shared.prompt(title: "Where would you like to go?", text: path.path, completion: { path in
                             let path = generateNavPath(path: path ?? "")
                             
                             if !path.isEmpty {
@@ -191,7 +211,7 @@ struct FileBrowserView: View {
                 .labelStyle(.iconOnly)
             }
         }
-        .settingsListStyle(isPlain: plainList)
+        
         .sheet(isPresented: $showFavs) {
             FavoritesSheet()
         }
@@ -230,10 +250,10 @@ struct FileBrowserView: View {
         }
     }
     
-    // MARK: file handling functions
+    // MARK: handle files
     private func loadFilesFromPath() {
         do {
-            let pathFiles = try FileManager.default.contentsOfDirectory(at: path, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey])
+            let pathFiles = try fm.contentsOfDirectory(at: path, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey])
             
             let unsortedFiles = pathFiles.map { fileURL in
                 return getFileItem(at: fileURL)
@@ -263,11 +283,9 @@ struct FileBrowserView: View {
         }
 
         sortedFiles = filesAscend ? sortedFiles : sortedFiles.reversed()
-        
         sortedFiles = sortedFiles.sorted { a, b in
             a.hidden && !b.hidden
         }
-        
         return sortedFiles
     }
     
@@ -276,14 +294,12 @@ struct FileBrowserView: View {
         switch result {
         case .success(let fileURL):
             do {
-                // gotta do this for the file picker to work properly
                 let stopAccess = fileURL.startAccessingSecurityScopedResource()
                 defer {
                     if stopAccess {
                         fileURL.stopAccessingSecurityScopedResource()
                     }
                 }
-                
                 let data = try Data(contentsOf: fileURL)
                 
                 let newURL = path.appendingPathComponent(fileURL.lastPathComponent)
@@ -302,14 +318,20 @@ struct FileBrowserView: View {
     }
 }
 
-// bullshit
 extension View {
     @ViewBuilder
-    func settingsListStyle(isPlain: Bool) -> some View {
-        if isPlain {
-            self.listStyle(.inset)
-        } else {
-            self.listStyle(.insetGrouped)
+    func customListStyle(_ selection: Int) -> some View {
+        switch selection {
+        case 2: self.listStyle(.inset)
+        case 3: self.listStyle(.grouped)
+        default: self.listStyle(.insetGrouped)
+        }
+    }
+    
+    @ViewBuilder
+    func adaptiveListMargin() -> some View {
+        if #available(iOS 26.0, *) {
+            self.contentMargins(.top, 0)
         }
     }
 }

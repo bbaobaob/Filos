@@ -11,7 +11,6 @@ import UniformTypeIdentifiers
 
 struct InfoViewer: View {
     @Environment(\.dismiss) var dismiss
-    
     var file: FileItem
     
     init(_ file: FileItem) {
@@ -22,135 +21,37 @@ struct InfoViewer: View {
         NavigationView {
             List {
                 Section {
-                    HStack {
-                        Text("Name")
-                        Spacer()
-                        Text(file.name)
-                            .foregroundStyle(.secondary)
-                    }
-                    .contextMenu {
-                        Button {
-                            UIPasteboard.general.string = file.name
-                        } label: {
-                            Label("Copy Name", systemImage: "character.cursor.ibeam")
-                        }
-                    }
-                    HStack {
-                        Text("Path")
-                        Spacer()
-                        Text(file.fileURL.path)
-                            .foregroundStyle(.secondary)
-                    }
-                    .contextMenu {
-                        Button {
-                            UIPasteboard.general.string = file.fileURL.path
-                        } label: {
-                            Label("Copy Path", systemImage: "character.cursor.ibeam")
-                        }
-                    }
+                    StringInfoCell(file.name, label: "Name")
+                    StringInfoCell(file.fileURL.path, label: "Path")
                     if file.type == .symlink {
-                        HStack {
-                            Text("Destination Path")
-                            Spacer()
-                            Text(file.destURL.path)
-                                .foregroundStyle(.secondary)
-                        }
-                        .contextMenu {
-                            Button {
-                                UIPasteboard.general.string = file.destURL.path
-                            } label: {
-                                Label("Copy Path", systemImage: "character.cursor.ibeam")
-                            }
-                        }
+                        StringInfoCell(file.destURL.path, label: "Destination Path")
                     }
                     if file.type == .file {
-                        HStack {
-                            Text("Size")
-                            Spacer()
-                            Text("\(ByteCountFormatter.string(fromByteCount: Int64(file.size), countStyle: .file))")
-                                .foregroundStyle(.secondary)
-                        }
+                        StringInfoCell("\(ByteCountFormatter.string(fromByteCount: Int64(file.size), countStyle: .file))", label: "Size")
                     }
                 }
                 
                 Section {
-                    HStack {
-                        Text("UTType")
-                        Spacer()
-                        Text(file.uttype.identifier)
-                            .foregroundStyle(.secondary)
-                    }
-                    .contextMenu {
-                        Button {
-                            UIPasteboard.general.string = file.uttype.identifier
-                        } label: {
-                            Label("Copy UTType", systemImage: "doc")
-                        }
-                    }
-                    HStack {
-                        Text("Creation Date")
-                        Spacer()
-                        Text(file.creationDateStr)
-                            .foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Text("Last Modified")
-                        Spacer()
-                        Text(file.modifiedDateStr)
-                            .foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Text("Symlink")
-                        Spacer()
-                        Image(systemName: file.type == .symlink ? "checkmark" : "xmark")
-                            .foregroundStyle(.secondary)
-                    }
+                    StringInfoCell(file.uttype.identifier, label: "UTType")
+                    StringInfoCell(file.creationDateStr, label: "Creation Date")
+                    StringInfoCell(file.modifiedDateStr, label: "Last Modified")
+                    BoolInfoCell(file.type == .symlink, label: "Symlink")
                 } header: {
                     HeaderLabel(text: "File", icon: "doc")
                 }
                 
                 Section {
-                    HStack {
-                        Text("POSIX Permissions")
-                        Spacer()
-                        Text(file.posixPerms)
-                            .foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Text("Owner")
-                        Spacer()
-                        Text(file.owner)
-                            .foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Text("Group")
-                        Spacer()
-                        Text(file.group)
-                            .foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Text("Readable")
-                        Spacer()
-                        Image(systemName: file.readable ? "checkmark" : "xmark")
-                            .foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Text("Writable")
-                        Spacer()
-                        Image(systemName: file.writable ? "checkmark" : "xmark")
-                            .foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Text("Executable")
-                        Spacer()
-                        Image(systemName: file.executable ? "checkmark" : "xmark")
-                            .foregroundStyle(.secondary)
-                    }
+                    StringInfoCell(file.posixPerms, label: "POSIX Permissions")
+                    StringInfoCell(file.owner, label: "Owner")
+                    StringInfoCell(file.group, label: "Group")
+                    BoolInfoCell(file.readable, label: "Readable")
+                    BoolInfoCell(file.writable, label: "Writable")
+                    BoolInfoCell(file.executable, label: "Executable")
                 } header: {
                     HeaderLabel(text: "Permissions", icon: "shield")
                 }
             }
-            .navigationTitle(file.type == .file ? "File Info" : "Folder Info")
+            .navigationTitle("\(file.type.rawValue.capitalized) Info")
             .navigationBarTitleDisplayMode(.inline)
             .listStyle(.insetGrouped)
             .toolbar {
@@ -164,5 +65,50 @@ struct InfoViewer: View {
             }
         }
         .navigationViewStyle(.stack)
+    }
+    
+    private struct StringInfoCell: View {
+        var string: String
+        var label: String
+        
+        init(_ string: String, label: String) {
+            self.string = string
+            self.label = label
+        }
+        
+        var body: some View {
+            HStack {
+                Text(label)
+                Spacer()
+                Text(string)
+                    .foregroundStyle(.secondary)
+            }
+            .contextMenu {
+                Button {
+                    UIPasteboard.general.string = string
+                } label: {
+                    Label("Copy Value", systemImage: "doc.on.doc")
+                }
+            }
+        }
+    }
+    
+    private struct BoolInfoCell: View {
+        var bool: Bool
+        var label: String
+        
+        init(_ bool: Bool, label: String) {
+            self.bool = bool
+            self.label = label
+        }
+        
+        var body: some View {
+            HStack {
+                Text(label)
+                Spacer()
+                Image(systemName: bool ? "checkmark" : "xmark")
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 }
