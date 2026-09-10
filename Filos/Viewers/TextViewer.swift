@@ -12,7 +12,7 @@ struct TextViewer: View {
     @EnvironmentObject var mgr: FilosManager
     @Environment(\.dismiss) var dismiss
     
-    @AppStorage("textViewerSize") var textViewerSize = 0
+    @AppStorage("textViewerSize") var textViewerSize = 11
     @AppStorage("useMonospaced") var useMonospaced = true
     
     var fileURL: URL
@@ -37,6 +37,7 @@ struct TextViewer: View {
                         Text(fileText)
                             .font(.system(size: CGFloat(textViewerSize), design: useMonospaced ? .monospaced : .default))
                             .padding(5)
+                            .textSelection(.enabled)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

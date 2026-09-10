@@ -18,7 +18,7 @@ struct LogView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         Text(mgr.logOutput)
-                            .font(.system(size: 12, design: .monospaced))
+                            .font(.system(size: 11, design: .monospaced))
                             .multilineTextAlignment(.leading)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)

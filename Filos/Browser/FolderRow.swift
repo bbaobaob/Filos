@@ -12,20 +12,21 @@ import ZIPFoundation
 
 struct FolderRow: View {
     @EnvironmentObject var mgr: FilosManager
-    @AppStorage("favList") var favList: [FavoriteItem] = []
+    //@AppStorage("favList") var favList: [FavoriteItem] = []
     @AppStorage("hideFavs") var hideFavs = false
     var file: FileItem
+    @Binding var previewer: FBPreviewer?
     
-    @State private var previewURL: URL?
+   // @State private var previewURL: URL?
     @State private var folderType: FolderType = .normal
     
-    @State private var showInfo = false
+    //@State private var showInfo = false
     
     var body: some View {
         Button {
             mgr.push(file.destURL)
         } label: {
-            HStack(spacing: isSolariumUI() ? 12 : 10) {
+            HStack(spacing: fileRowSpacing) {
                 Group {
                     if folderType == .bundle || folderType == .container {
                         Image(systemName: "app")
@@ -52,7 +53,8 @@ struct FolderRow: View {
                 Spacer()
                 
                 Button {
-                    showInfo.toggle()
+                    //showInfo.toggle()
+                    previewer = FBPreviewer(type: .info, file: file)
                 } label: {
                     Image(systemName: "info.circle")
                 }
@@ -63,16 +65,23 @@ struct FolderRow: View {
             }
         }
         .foregroundStyle(Color(.label))
+        /*
         .onAppear {
-            folderType = getFolderType(url: file.fileURL)
+            DispatchQueue.global(qos: .userInitiated).async {
+                folderType = getFolderType(url: file.fileURL)
+            }
         }
+         */
+        /*
         .sheet(isPresented: $showInfo) {
             InfoViewer(file)
         }
         .quickLookPreview($previewURL)
+         */
         .contextMenu {
             Button {
-                previewURL = file.fileURL
+                //previewURL = file.fileURL
+                previewer = FBPreviewer(type: .quickLook, file: file)
             } label: {
                 Label("Quick Look", systemImage: "eye")
             }
@@ -80,7 +89,8 @@ struct FolderRow: View {
             Divider()
             
             Button {
-                showInfo.toggle()
+                //showInfo.toggle()
+                previewer = FBPreviewer(type: .info, file: file)
             } label: {
                 Label("Get Info", systemImage: "info.circle")
             }
@@ -96,6 +106,7 @@ struct FolderRow: View {
                 Label("Compress", systemImage: "archivebox")
             }
             
+            /*
             if !hideFavs {
                 if let index = favList.firstIndex(where: { $0.path == file.fileURL.path }) {
                     Button {
@@ -106,6 +117,24 @@ struct FolderRow: View {
                 } else {
                     Button {
                         favList.append(FavoriteItem(label: file.name, path: file.fileURL.path))
+                    } label: {
+                        Label("Favorite", systemImage: "star")
+                    }
+                }
+            }
+             */
+            
+            if !hideFavs {
+                Divider()
+                if isFavorited(item: file) {
+                    Button {
+                        removeFavorite(item: file)
+                    } label: {
+                        Label("Remove Favorite", systemImage: "star.slash")
+                    }
+                } else {
+                    Button {
+                        addFavorite(item: file)
                     } label: {
                         Label("Favorite", systemImage: "star")
                     }

@@ -25,6 +25,28 @@ enum FileSortMode: String, CaseIterable, Codable, Hashable {
     }
 }
 
+enum FileBrowserState {
+    case loading, loaded, noPerms, noFiles, unknownError
+    
+    var description: String {
+        switch self {
+        case .noFiles: return "This directory is empty."
+        case .noPerms: return "You don't have permission to view the files in this directory."
+        case .unknownError: return "Unknown error."
+        default: return ""
+        }
+    }
+    
+    var symbol: String {
+        switch self {
+        case .noFiles: return "questionmark.folder"
+        case .noPerms: return "externaldrive.badge.xmark"
+        case .unknownError: return "exclamationmark.triangle"
+        default: return ""
+        }
+    }
+}
+
 struct FileBrowserView: View {
     @EnvironmentObject var mgr: FilosManager
     @State var path: URL = URL(fileURLWithPath: "/")
@@ -36,19 +58,53 @@ struct FileBrowserView: View {
     @AppStorage("filesAscend") var filesAscend: Bool = true
     @AppStorage("listStyle") var listStyle = 1
     
+    @State private var receivedPreviewer: FBPreviewer?
+    @State private var previewer: FBPreviewer?
+    @State private var quickLookURL: URL?
+    @State private var currentState = FileBrowserState.loading
+    @State private var localizedError = ""
     @State private var showFavs = false
     @State private var showLogs = false
     @State private var showSettings = false
     @State private var showFileImporter = false
     
     var body: some View {
-        List {
-            ForEach(dirFiles) { file in
-                if file.type == .folder {
-                    FolderRow(file: file)
-                } else {
-                    FileRow(file: file)
+        Group {
+            if currentState == .loading {
+                VStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(1.25)
+                    Text("Loading Files...")
+                        .foregroundStyle(.secondary)
                 }
+                .frame(maxWidth: .infinity)
+            } else if currentState == .loaded {
+                List {
+                    ForEach(dirFiles) { file in
+                        if file.type == .folder {
+                            FolderRow(file: file, previewer: $receivedPreviewer)
+                        } else {
+                            FileRow(file: file, previewer: $receivedPreviewer)
+                        }
+                    }
+                }
+            } else {
+                VStack(spacing: 8) {
+                    Image(systemName: currentState.symbol)
+                        .font(.largeTitle)
+                    if currentState == .noFiles {
+                        Text(currentState.description)
+                    } else {
+                        VStack {
+                            Text("Failed to load files from path!")
+                            Text(currentState == .unknownError ? localizedError : currentState.description)
+                                .multilineTextAlignment(.center)
+                                .foregroundStyle(.secondary)
+                                .font(.footnote)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity)
             }
         }
         .navigationTitle(path.lastPathComponent)
@@ -85,8 +141,10 @@ struct FileBrowserView: View {
                     .disabled(chosenSort == .system)
                 } label: {
                     Label("Sort", systemImage: "line.3.horizontal.decrease")
+                        .labelStyle(.iconOnly)
                 }
                 .labelStyle(.iconOnly)
+                .disabled(currentState != .loaded)
             }
             
             ToolbarItem(placement: .topBarTrailing) {
@@ -102,7 +160,7 @@ struct FileBrowserView: View {
                                         mgr.refreshFiles.toggle()
                                     } catch {
                                         print("(fm) failed to create file: \(error)")
-                                        Alertinator.shared.alert(title: "Failed to create file!", body: Errors.checkLogs)
+                                        
                                     }
                                 }
                             })
@@ -165,12 +223,14 @@ struct FileBrowserView: View {
                     } label: {
                         Label("New...", systemImage: "plus")
                     }
+                    .disabled(currentState != .loaded && currentState != .noFiles)
                     
                     Button {
                         showFileImporter.toggle()
                     } label: {
                         Label("Import File", systemImage: "arrow.down.doc")
                     }
+                    .disabled(currentState != .loaded && currentState != .noFiles)
                     
                     Divider()
                     
@@ -211,7 +271,22 @@ struct FileBrowserView: View {
                 .labelStyle(.iconOnly)
             }
         }
-        
+        .onChange(of: receivedPreviewer) { receivedPrev in
+            if receivedPrev?.type == .quickLook {
+                quickLookURL = receivedPrev?.file.fileURL
+            } else {
+                previewer = receivedPrev
+            }
+        }
+        .sheet(item: $previewer) { newPrev in
+            switch newPrev.type {
+            case .info: InfoViewer(newPrev.file)
+            case .plist: PlistViewer(newPrev.file.fileURL)
+            case .text: TextViewer(newPrev.file.fileURL)
+            default: EmptyView()
+            }
+        }
+        .quickLookPreview($quickLookURL)
         .sheet(isPresented: $showFavs) {
             FavoritesSheet()
         }
@@ -228,8 +303,8 @@ struct FileBrowserView: View {
             mgr.refreshFiles.toggle()
         }
         .onAppear {
-            Task {
-                loadFilesFromPath()
+            DispatchQueue.global(qos: .userInitiated).async {
+                loadDirFiles()
             }
         }
         .onChange(of: searchText) { newSearch in
@@ -240,19 +315,22 @@ struct FileBrowserView: View {
             }
         }
         .onChange(of: chosenSort) { _ in
-            loadFilesFromPath()
+            dirFiles = sortFiles(files: dirFiles)
         }
         .onChange(of: filesAscend) { _ in
-            loadFilesFromPath()
+            dirFiles = sortFiles(files: dirFiles)
         }
         .onChange(of: mgr.refreshFiles) { _ in
-            loadFilesFromPath()
+            DispatchQueue.global(qos: .userInitiated).async {
+                loadDirFiles()
+            }
         }
     }
     
     // MARK: handle files
-    private func loadFilesFromPath() {
+    private func loadDirFiles() {
         do {
+            currentState = .loading
             let pathFiles = try fm.contentsOfDirectory(at: path, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey])
             
             let unsortedFiles = pathFiles.map { fileURL in
@@ -260,9 +338,20 @@ struct FileBrowserView: View {
             }
             dirFiles = sortFiles(files: unsortedFiles)
             unfilteredFiles = sortFiles(files: unsortedFiles)
+            if dirFiles.isEmpty {
+                currentState = .noFiles
+            } else {
+                currentState = .loaded
+            }
         } catch {
-            print("[!] failed to load files from \(path): \(error)")
-            Alertinator.shared.alert(title: "Failed to load files from \(path)!", body: "\(error)")
+            let nserror = error as NSError
+            print("[!] failed to load files from \(path.path): \(nserror.localizedDescription) (code \(nserror.code))")
+            if nserror.code == NSFileReadNoPermissionError {
+                currentState = .noPerms
+            } else {
+                localizedError = nserror.localizedDescription
+                currentState = .unknownError
+            }
         }
     }
     

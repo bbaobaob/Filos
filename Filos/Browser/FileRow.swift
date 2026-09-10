@@ -10,24 +10,88 @@ import PartyUI
 import QuickLook
 import ZIPFoundation
 
+struct FBPreviewer: Identifiable, Equatable {
+    let id = UUID()
+    var type: FBPreviewTypes
+    var file: FileItem
+}
+
+enum FBPreviewTypes: Equatable {
+    case info, plist, text, quickLook
+}
+
+let fileRowSpacing: CGFloat = {
+    if isSolariumUI() {
+        return 12
+    } else {
+        return 10
+    }
+}()
+
 struct FileRow: View {
     @EnvironmentObject var mgr: FilosManager
-    @AppStorage("favList") var favList: [FavoriteItem] = []
     @AppStorage("hideFavs") var hideFavs = false
     @AppStorage("hideDates") var hideDates = false
     var file: FileItem
+    @Binding var previewer: FBPreviewer?
     
     @State private var conformsText = false
     @State private var conformsPlist = false
     @State private var conformsZip = false
     
-    @State private var showInfo = false
-    @State private var showPlistViewer = false
-    @State private var showTextViewer = false
-    @State private var previewURL: URL?
-    
     var body: some View {
-        Group {
+        Button {
+            fileTapAction()
+        } label: {
+            HStack(spacing: fileRowSpacing) {
+                Image(systemName: file.type == .file ? "doc" : "arrow.up.right.circle")
+                    .foregroundStyle(file.hidden ? .secondary : .primary)
+                
+                VStack(alignment: .leading) {
+                    Text(file.name)
+                        .foregroundStyle(file.hidden ? .secondary : .primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    
+                    if !hideDates && !file.modifiedDateStr.isEmpty && file.type == .file {
+                        Text(file.modifiedDateStr)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                
+                if file.type == .file {
+                    Text("\(ByteCountFormatter.string(fromByteCount: Int64(file.size), countStyle: .file))")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                
+                Button {
+                    previewer = FBPreviewer(type: .info, file: file)
+                } label: {
+                    Image(systemName: "info.circle")
+                }
+                .buttonStyle(.plain)
+                Chevron()
+            }
+        }
+        .swipeActions {
+            Button(role: .destructive) {
+                do {
+                    try fm.removeItem(at: file.fileURL)
+                    mgr.refreshFiles.toggle()
+                } catch {
+                    print("[!] failed to delete file: \(error)")
+                    Alertinator.shared.alert(title: "Failed to delete file!", body: Errors.checkLogs)
+                }
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+        .padding(.vertical, !hideDates && !file.modifiedDateStr.isEmpty && file.type == .file && !isSolariumUI() ? 1 : 0)
+            /*
             if file.type == .file {
                 Button {
                     if conformsZip {
@@ -39,11 +103,14 @@ struct FileRow: View {
                         }
                     } else {
                         if conformsPlist {
-                            showPlistViewer.toggle()
+                            //showPlistViewer.toggle()
+                            previewer = FBPreviewer(type: .plist, file: file)
                         } else if conformsText {
-                            showTextViewer.toggle()
+                            //showTextViewer.toggle()
+                            previewer = FBPreviewer(type: .text, file: file)
                         } else {
-                            previewURL = file.fileURL
+                            //previewURL = file.fileURL
+                            previewer = FBPreviewer(type: .quickLook, file: file)
                         }
                     }
                 } label: {
@@ -72,7 +139,8 @@ struct FileRow: View {
                         }
                         
                         Button {
-                            showInfo.toggle()
+                            //showInfo.toggle()
+                            previewer = FBPreviewer(type: .info, file: file)
                         } label: {
                             Image(systemName: "info.circle")
                         }
@@ -96,7 +164,8 @@ struct FileRow: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         
                         Button {
-                            showInfo.toggle()
+                            //showInfo.toggle()
+                            previewer = FBPreviewer(type: .info, file: file)
                         } label: {
                             Image(systemName: "info.circle")
                         }
@@ -106,15 +175,18 @@ struct FileRow: View {
                     }
                 }
             }
-        }
+             */
         .foregroundStyle(Color(.label))
         .onAppear {
-            conformsText = conformsToTextViewer(file.fileURL)
-            conformsPlist = conformsToPlistViewer(file.fileURL)
-            if file.uttype.conforms(to: .zip) {
-                conformsZip = true
+            DispatchQueue.global(qos: .userInitiated).async {
+                conformsText = conformsToTextViewer(file.fileURL)
+                conformsPlist = conformsToPlistViewer(file.fileURL)
+                if file.uttype.conforms(to: .zip) {
+                    conformsZip = true
+                }
             }
         }
+        /*
         .sheet(isPresented: $showInfo) {
             InfoViewer(file)
         }
@@ -125,19 +197,22 @@ struct FileRow: View {
             TextViewer(file.fileURL)
         }
         .quickLookPreview($previewURL)
+         */
         // MARK: cell actions
         .contextMenu {
             if conformsText || conformsPlist {
                 Menu {
                     Button {
-                        previewURL = file.fileURL
+                        //previewURL = file.fileURL
+                        previewer = FBPreviewer(type: .quickLook, file: file)
                     } label: {
                         Label("Quick Look", systemImage: "eye")
                     }
                     
                     if conformsPlist {
                         Button {
-                            showPlistViewer.toggle()
+                            //showPlistViewer.toggle()
+                            previewer = FBPreviewer(type: .plist, file: file)
                         } label: {
                             Label("Plist Viewer", systemImage: "tablecells")
                         }
@@ -145,7 +220,8 @@ struct FileRow: View {
                     
                     if conformsText {
                         Button {
-                            showTextViewer.toggle()
+                            //showTextViewer.toggle()
+                            previewer = FBPreviewer(type: .text, file: file)
                         } label: {
                             Label("Text Viewer", systemImage: "doc.plaintext")
                         }
@@ -155,7 +231,7 @@ struct FileRow: View {
                 }
             } else {
                 Button {
-                    previewURL = file.fileURL
+                    previewer = FBPreviewer(type: .quickLook, file: file)
                 } label: {
                     Label("Quick Look", systemImage: "eye")
                 }
@@ -164,7 +240,7 @@ struct FileRow: View {
             Divider()
             
             Button {
-                showInfo.toggle()
+                previewer = FBPreviewer(type: .info, file: file)
             } label: {
                 Label("Get Info", systemImage: "info.circle")
             }
@@ -193,7 +269,7 @@ struct FileRow: View {
                         if res {
                             mgr.refreshFiles.toggle()
                         } else {
-                            Alertinator.shared.alert(title: "Failed to uncompress file!", body: Errors.checkLogs)
+                            Haptic.shared.play(.heavy)
                         }
                     } label: {
                         Label("Uncompress", systemImage: "archivebox")
@@ -227,16 +303,15 @@ struct FileRow: View {
             
             if !hideFavs {
                 Divider()
-                
-                if let index = favList.firstIndex(where: { $0.path == file.fileURL.path }) {
+                if isFavorited(item: file) {
                     Button {
-                        favList.remove(at: index)
+                        removeFavorite(item: file)
                     } label: {
                         Label("Remove Favorite", systemImage: "star.slash")
                     }
                 } else {
                     Button {
-                        favList.append(FavoriteItem(label: file.name, path: file.fileURL.path))
+                        addFavorite(item: file)
                     } label: {
                         Label("Favorite", systemImage: "star")
                     }
@@ -274,6 +349,30 @@ struct FileRow: View {
                 }
             } label: {
                 Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+    
+    // MARK: functions
+    private func fileTapAction() {
+        if file.type == .symlink {
+            mgr.push(file.destURL)
+        } else {
+            if conformsZip {
+                let res = unzipFile(file.fileURL)
+                if res {
+                    mgr.refreshFiles.toggle()
+                } else {
+                    Haptic.shared.play(.heavy)
+                }
+            } else {
+                if conformsPlist {
+                    previewer = FBPreviewer(type: .plist, file: file)
+                } else if conformsText {
+                    previewer = FBPreviewer(type: .text, file: file)
+                } else {
+                    previewer = FBPreviewer(type: .quickLook, file: file)
+                }
             }
         }
     }

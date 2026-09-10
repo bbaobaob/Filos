@@ -8,7 +8,7 @@
 import Foundation
 import UniformTypeIdentifiers
 
-struct FileItem: Identifiable {
+struct FileItem: Identifiable, Equatable {
     let id = UUID()
     var name: String
     var fileURL: URL
@@ -81,6 +81,33 @@ func getFileItem(at url: URL) -> FileItem {
     item.executable = fm.isExecutableFile(atPath: url.path)
     
     return item
+}
+
+// MARK: favorites
+
+func isFavorited(item: FileItem) -> Bool {
+    if let array = UserDefaults.standard.object(forKey: "favList") as? [FavoriteItem] {
+        if let index = array.firstIndex(where: { $0.path == item.fileURL.path }) {
+            return true
+        }
+    }
+    return false
+}
+
+func addFavorite(item: FileItem) {
+    if var array = UserDefaults.standard.object(forKey: "favList") as? [FavoriteItem] {
+        array.append(FavoriteItem(label: item.name, path: item.fileURL.path))
+        UserDefaults.standard.set(array, forKey: "favList")
+    }
+}
+
+func removeFavorite(item: FileItem) {
+    if var array = UserDefaults.standard.object(forKey: "favList") as? [FavoriteItem] {
+        if let index = array.firstIndex(where: { $0.path == item.fileURL.path }) {
+            array.remove(at: index)
+            UserDefaults.standard.set(array, forKey: "favList")
+        }
+    }
 }
 
 enum FileType: String {
