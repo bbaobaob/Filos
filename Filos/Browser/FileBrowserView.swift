@@ -49,7 +49,7 @@ enum FileBrowserState {
 
 struct FileBrowserView: View {
     @EnvironmentObject var mgr: FilosManager
-    @State var path: URL = URL(fileURLWithPath: "/")
+    @State var item: FileItem
     
     @State private var dirFiles: [FileItem] = []
     @State private var unfilteredFiles: [FileItem] = []
@@ -82,9 +82,9 @@ struct FileBrowserView: View {
                 List {
                     ForEach(dirFiles) { file in
                         if file.type == .folder {
-                            FolderRow(file: file, previewer: $receivedPreviewer)
+                            FolderRow(item: file, parent: item, previewer: $receivedPreviewer)
                         } else {
-                            FileRow(file: file, previewer: $receivedPreviewer)
+                            FileRow(item: file, parent: item, previewer: $receivedPreviewer)
                         }
                     }
                 }
@@ -107,7 +107,7 @@ struct FileBrowserView: View {
                 .frame(maxWidth: .infinity)
             }
         }
-        .navigationTitle(path.lastPathComponent)
+        .navigationTitle(item.fileURL.lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
         .customListStyle(listStyle)
         .adaptiveListMargin()
@@ -149,90 +149,92 @@ struct FileBrowserView: View {
             
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Menu {
-                        Button {
-                            Alertinator.shared.prompt(title: "What would you like to call your new file? Make sure you attach an extension at the end.", placeholder: "new.txt", completion: { name in
-                                let name = name ?? ""
-                                if !name.isEmpty {
-                                    do {
-                                        let fileURL = path.appendingPathComponent(name)
-                                        try Data().write(to: fileURL)
-                                        mgr.refreshFiles.toggle()
-                                    } catch {
-                                        print("(fm) failed to create file: \(error)")
-                                        
+                    if item.writable {
+                        Menu {
+                            Button {
+                                Alertinator.shared.prompt(title: "What would you like to call your new file? Make sure you attach an extension at the end.", placeholder: "new.txt", completion: { name in
+                                    let name = name ?? ""
+                                    if !name.isEmpty {
+                                        do {
+                                            let fileURL = item.fileURL.appendingPathComponent(name)
+                                            try Data().write(to: fileURL)
+                                            mgr.refreshFiles.toggle()
+                                        } catch {
+                                            print("(fm) failed to create file: \(error)")
+                                            
+                                        }
                                     }
-                                }
-                            })
+                                })
+                            } label: {
+                                Label("File", systemImage: "doc")
+                            }
+                            
+                            Button {
+                                Alertinator.shared.prompt(title: "What would you like to call your new property list?", placeholder: "Plist Name", completion: { name in
+                                    let name = name ?? ""
+                                    if !name.isEmpty {
+                                        do {
+                                            let fileURL = item.fileURL.appendingPathComponent(name + ".plist")
+                                            let data = try PropertyListSerialization.data(fromPropertyList: NSMutableDictionary(), format: .xml, options: 0)
+                                            try data.write(to: fileURL)
+                                            mgr.refreshFiles.toggle()
+                                        } catch {
+                                            print("(fm) failed to create plist: \(error)")
+                                            Alertinator.shared.alert(title: "Failed to create property list!", body: Errors.checkLogs)
+                                        }
+                                    }
+                                })
+                            } label: {
+                                Label("Property List", systemImage: "tablecells")
+                            }
+                            
+                            Button {
+                                Alertinator.shared.prompt(title: "What would you like to call your new folder?", placeholder: "Folder Name", completion: { name in
+                                    let name = name ?? ""
+                                    if !name.isEmpty {
+                                        do {
+                                            try fm.createDirectoryIfNeeded(at: item.fileURL.appendingPathComponent(name))
+                                            mgr.refreshFiles.toggle()
+                                        } catch {
+                                            print("(fm) failed to create folder: \(error)")
+                                            Alertinator.shared.alert(title: "Failed to create folder!", body: Errors.checkLogs)
+                                        }
+                                    }
+                                })
+                            } label: {
+                                Label("Folder", systemImage: "folder")
+                            }
+                            
+                            Button {
+                                Alertinator.shared.prompt(title: "Where would you like your new symlink to point to?", placeholder: "/path/to/dir", completion: { symPath in
+                                    let symPath = symPath ?? ""
+                                    if !symPath.isEmpty {
+                                        do {
+                                            try fm.createSymbolicLink(atPath: item.fileURL.appendingPathComponent(URL(fileURLWithPath: symPath).lastPathComponent).path, withDestinationPath: symPath)
+                                            mgr.refreshFiles.toggle()
+                                        } catch {
+                                            print("(fm) failed to create symlink: \(error)")
+                                            Alertinator.shared.alert(title: "Failed to create symlink!", body: "\(error)")
+                                        }
+                                    }
+                                })
+                            } label: {
+                                Label("Symlink", systemImage: "arrow.up.right.circle")
+                            }
                         } label: {
-                            Label("File", systemImage: "doc")
+                            Label("New...", systemImage: "plus")
                         }
+                        .disabled(currentState != .loaded && currentState != .noFiles)
                         
                         Button {
-                            Alertinator.shared.prompt(title: "What would you like to call your new property list?", placeholder: "Plist Name", completion: { name in
-                                let name = name ?? ""
-                                if !name.isEmpty {
-                                    do {
-                                        let fileURL = path.appendingPathComponent(name + ".plist")
-                                        let data = try PropertyListSerialization.data(fromPropertyList: NSMutableDictionary(), format: .xml, options: 0)
-                                        try data.write(to: fileURL)
-                                        mgr.refreshFiles.toggle()
-                                    } catch {
-                                        print("(fm) failed to create plist: \(error)")
-                                        Alertinator.shared.alert(title: "Failed to create property list!", body: Errors.checkLogs)
-                                    }
-                                }
-                            })
+                            showFileImporter.toggle()
                         } label: {
-                            Label("Property List", systemImage: "tablecells")
+                            Label("Import File", systemImage: "arrow.down.doc")
                         }
+                        .disabled(currentState != .loaded && currentState != .noFiles)
                         
-                        Button {
-                            Alertinator.shared.prompt(title: "What would you like to call your new folder?", placeholder: "Folder Name", completion: { name in
-                                let name = name ?? ""
-                                if !name.isEmpty {
-                                    do {
-                                        try fm.createDirectoryIfNeeded(at: path.appendingPathComponent(name))
-                                        mgr.refreshFiles.toggle()
-                                    } catch {
-                                        print("(fm) failed to create folder: \(error)")
-                                        Alertinator.shared.alert(title: "Failed to create folder!", body: Errors.checkLogs)
-                                    }
-                                }
-                            })
-                        } label: {
-                            Label("Folder", systemImage: "folder")
-                        }
-                        
-                        Button {
-                            Alertinator.shared.prompt(title: "Where would you like your new symlink to point to?", placeholder: "/path/to/dir", completion: { symPath in
-                                let symPath = symPath ?? ""
-                                if !symPath.isEmpty {
-                                    do {
-                                        try fm.createSymbolicLink(atPath: path.appendingPathComponent(URL(fileURLWithPath: symPath).lastPathComponent).path, withDestinationPath: symPath)
-                                        mgr.refreshFiles.toggle()
-                                    } catch {
-                                        print("(fm) failed to create symlink: \(error)")
-                                        Alertinator.shared.alert(title: "Failed to create symlink!", body: "\(error)")
-                                    }
-                                }
-                            })
-                        } label: {
-                            Label("Symlink", systemImage: "arrow.up.right.circle")
-                        }
-                    } label: {
-                        Label("New...", systemImage: "plus")
+                        Divider()
                     }
-                    .disabled(currentState != .loaded && currentState != .noFiles)
-                    
-                    Button {
-                        showFileImporter.toggle()
-                    } label: {
-                        Label("Import File", systemImage: "arrow.down.doc")
-                    }
-                    .disabled(currentState != .loaded && currentState != .noFiles)
-                    
-                    Divider()
                     
                     Button {
                         showFavs.toggle()
@@ -241,7 +243,7 @@ struct FileBrowserView: View {
                     }
                     
                     Button {
-                        Alertinator.shared.prompt(title: "Where would you like to go?", text: path.path, completion: { path in
+                        Alertinator.shared.prompt(title: "Where would you like to go?", text: item.fileURL.path, completion: { path in
                             let path = generateNavPath(path: path ?? "")
                             
                             if !path.isEmpty {
@@ -331,7 +333,7 @@ struct FileBrowserView: View {
     private func loadDirFiles() {
         do {
             currentState = .loading
-            let pathFiles = try fm.contentsOfDirectory(at: path, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey])
+            let pathFiles = try fm.contentsOfDirectory(at: item.fileURL, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey])
             
             let unsortedFiles = pathFiles.map { fileURL in
                 return getFileItem(at: fileURL)
@@ -345,7 +347,7 @@ struct FileBrowserView: View {
             }
         } catch {
             let nserror = error as NSError
-            print("[!] failed to load files from \(path.path): \(nserror.localizedDescription) (code \(nserror.code))")
+            print("[!] failed to load files from \(item.fileURL.path): \(nserror.localizedDescription) (code \(nserror.code))")
             if nserror.code == NSFileReadNoPermissionError {
                 currentState = .noPerms
             } else {
@@ -391,7 +393,7 @@ struct FileBrowserView: View {
                 }
                 let data = try Data(contentsOf: fileURL)
                 
-                let newURL = path.appendingPathComponent(fileURL.lastPathComponent)
+                let newURL = item.fileURL.appendingPathComponent(fileURL.lastPathComponent)
                 try? fm.removeItem(at: newURL)
                 
                 try data.write(to: newURL)

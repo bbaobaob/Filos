@@ -12,19 +12,15 @@ import ZIPFoundation
 
 struct FolderRow: View {
     @EnvironmentObject var mgr: FilosManager
-    //@AppStorage("favList") var favList: [FavoriteItem] = []
-    @AppStorage("hideFavs") var hideFavs = false
-    var file: FileItem
+    var item: FileItem
+    var parent: FileItem
     @Binding var previewer: FBPreviewer?
     
-   // @State private var previewURL: URL?
     @State private var folderType: FolderType = .normal
-    
-    //@State private var showInfo = false
     
     var body: some View {
         Button {
-            mgr.push(file.destURL)
+            mgr.push(item.destURL)
         } label: {
             HStack(spacing: fileRowSpacing) {
                 Group {
@@ -32,132 +28,98 @@ struct FolderRow: View {
                         Image(systemName: "app")
                             .frame(width: 20, alignment: .center)
                         VStack(alignment: .leading) {
-                            Text(folderLabel(url: file.fileURL))
-                                .foregroundStyle(file.hidden ? .secondary : .primary)
+                            Text(folderLabel(url: item.fileURL))
+                                .foregroundStyle(item.hidden ? .secondary : .primary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
-                            Text(file.fileURL.path)
+                            Text(item.fileURL.path)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
                     } else {
                         Image(systemName: "folder")
                             .frame(width: 20, alignment: .center)
-                            .foregroundStyle(file.hidden ? .secondary : .primary)
-                        Text(file.name)
+                            .foregroundStyle(item.hidden ? .secondary : .primary)
+                        Text(item.name)
                             .lineLimit(1)
-                            .foregroundStyle(file.hidden ? .secondary : .primary)
+                            .foregroundStyle(item.hidden ? .secondary : .primary)
                     }
                 }
                 
                 Spacer()
                 
                 Button {
-                    //showInfo.toggle()
-                    previewer = FBPreviewer(type: .info, file: file)
+                    previewer = FBPreviewer(type: .info, file: item)
                 } label: {
                     Image(systemName: "info.circle")
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(file.hidden ? .secondary : .primary)
+                .foregroundStyle(item.hidden ? .secondary : .primary)
                 
                 Chevron()
             }
         }
         .foregroundStyle(Color(.label))
-        /*
-        .onAppear {
-            DispatchQueue.global(qos: .userInitiated).async {
-                folderType = getFolderType(url: file.fileURL)
-            }
-        }
-         */
-        /*
-        .sheet(isPresented: $showInfo) {
-            InfoViewer(file)
-        }
-        .quickLookPreview($previewURL)
-         */
         .contextMenu {
-            Button {
-                //previewURL = file.fileURL
-                previewer = FBPreviewer(type: .quickLook, file: file)
-            } label: {
-                Label("Quick Look", systemImage: "eye")
+            if item.readable {
+                Button {
+                    previewer = FBPreviewer(type: .quickLook, file: item)
+                } label: {
+                    Label("Quick Look", systemImage: "eye")
+                }
+                Divider()
             }
             
-            Divider()
-            
             Button {
-                //showInfo.toggle()
-                previewer = FBPreviewer(type: .info, file: file)
+                previewer = FBPreviewer(type: .info, file: item)
             } label: {
                 Label("Get Info", systemImage: "info.circle")
             }
             
-            Button {
-                let res = zipFile(file.fileURL)
-                if res {
-                    mgr.refreshFiles.toggle()
-                } else {
-                    Alertinator.shared.alert(title: "Failed to compress file!", body: Errors.checkLogs)
-                }
-            } label: {
-                Label("Compress", systemImage: "archivebox")
-            }
-            
-            /*
-            if !hideFavs {
-                if let index = favList.firstIndex(where: { $0.path == file.fileURL.path }) {
-                    Button {
-                        favList.remove(at: index)
-                    } label: {
-                        Label("Remove Favorite", systemImage: "star.slash")
+            if parent.writable && item.readable {
+                Button {
+                    let res = zipFile(item.fileURL)
+                    if res {
+                        mgr.refreshFiles.toggle()
+                    } else {
+                        Alertinator.shared.alert(title: "Failed to compress file!", body: Errors.checkLogs)
                     }
-                } else {
-                    Button {
-                        favList.append(FavoriteItem(label: file.name, path: file.fileURL.path))
-                    } label: {
-                        Label("Favorite", systemImage: "star")
-                    }
-                }
-            }
-             */
-            
-            if !hideFavs {
-                Divider()
-                if isFavorited(item: file) {
-                    Button {
-                        removeFavorite(item: file)
-                    } label: {
-                        Label("Remove Favorite", systemImage: "star.slash")
-                    }
-                } else {
-                    Button {
-                        addFavorite(item: file)
-                    } label: {
-                        Label("Favorite", systemImage: "star")
-                    }
+                } label: {
+                    Label("Compress", systemImage: "archivebox")
                 }
             }
             
             Divider()
+            if mgr.isFavorited(item) {
+                Button {
+                    mgr.removeFavorite(item)
+                } label: {
+                    Label("Unfavorite", systemImage: "star.slash")
+                }
+            } else {
+                Button {
+                    mgr.addFavorite(item)
+                } label: {
+                    Label("Favorite", systemImage: "star")
+                }
+            }
             
             Button {
-                if let url = makeTemp(file.fileURL) {
+                if let url = makeTemp(item.fileURL) {
                     presentShareSheet(with: url)
                 }
             } label: {
                 Label("Share", systemImage: "square.and.arrow.up")
             }
             
-            Divider()
-            
-            Button(role: .destructive) {
-                try? fm.removeItem(at: file.fileURL)
-                mgr.refreshFiles.toggle()
-            } label: {
-                Label("Delete", systemImage: "trash")
+            if item.writable {
+                Divider()
+                Button(role: .destructive) {
+                    try? fm.removeItem(at: item.fileURL)
+                    mgr.refreshFiles.toggle()
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
             }
         }
     }

@@ -84,24 +84,24 @@ func getFileItem(at url: URL) -> FileItem {
 }
 
 // MARK: favorites
-
-func isFavorited(item: FileItem) -> Bool {
+func isFavorited(_ item: FileItem) -> Bool {
     if let array = UserDefaults.standard.object(forKey: "favList") as? [FavoriteItem] {
-        if let index = array.firstIndex(where: { $0.path == item.fileURL.path }) {
+        if let _ = array.firstIndex(where: { $0.path == item.fileURL.path }) {
             return true
         }
     }
     return false
 }
 
-func addFavorite(item: FileItem) {
+func addFavorite(_ item: FileItem) {
     if var array = UserDefaults.standard.object(forKey: "favList") as? [FavoriteItem] {
         array.append(FavoriteItem(label: item.name, path: item.fileURL.path))
+        print(array.description)
         UserDefaults.standard.set(array, forKey: "favList")
     }
 }
 
-func removeFavorite(item: FileItem) {
+func removeFavorite(_ item: FileItem) {
     if var array = UserDefaults.standard.object(forKey: "favList") as? [FavoriteItem] {
         if let index = array.firstIndex(where: { $0.path == item.fileURL.path }) {
             array.remove(at: index)

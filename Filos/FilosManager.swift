@@ -24,16 +24,32 @@ final class FilosManager: ObservableObject {
     static let shared = FilosManager()
     
     @Published var refreshFiles = false
-    
     @Published var logOutput = ""
     @Published var tokenVaild = false
-    
     @Published var navArray: [NavItem] = []
+    @AppStorage("favList") private var favorites: [FavoriteItem] = []
     
     init() { }
     
     func push(_ url: URL) {
         navArray.append(NavItem(url: url))
+    }
+    
+    func isFavorited(_ item: FileItem) -> Bool {
+        if let _ = favorites.firstIndex(where: { $0.path == item.fileURL.path }) {
+            return true
+        }
+        return false
+    }
+
+    func addFavorite(_ item: FileItem) {
+        favorites.append(FavoriteItem(label: item.name, path: item.fileURL.path))
+    }
+
+    func removeFavorite(_ item: FileItem) {
+        if let index = favorites.firstIndex(where: { $0.path == item.fileURL.path }) {
+            favorites.remove(at: index)
+        }
     }
 }
 

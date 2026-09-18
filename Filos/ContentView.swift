@@ -25,7 +25,7 @@ struct FileBrowserContainer: View {
     let url: URL
     
     var body: some View {
-        FileBrowserView(path: url)
+        FileBrowserView(item: getFileItem(at: url))
             .environmentObject(mgr)
             .background {
                 NavigationLink(
