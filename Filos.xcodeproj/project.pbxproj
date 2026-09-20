@@ -7,8 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		159AC6AE301B14D000E1D94C /* PartyUI in Frameworks */ = {isa = PBXBuildFile; productRef = 159AC6AD301B14D000E1D94C /* PartyUI */; };
-		15FE6F79301BEF0700DEAC9D /* PartyUI in Frameworks */ = {isa = PBXBuildFile; productRef = 15FE6F78301BEF0700DEAC9D /* PartyUI */; };
 		CC48540A300BC5A0007D98D0 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = CC485409300BC5A0007D98D0 /* ZIPFoundation */; };
 /* End PBXBuildFile section */
 
@@ -42,9 +40,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				15FE6F79301BEF0700DEAC9D /* PartyUI in Frameworks */,
 				CC48540A300BC5A0007D98D0 /* ZIPFoundation in Frameworks */,
-				159AC6AE301B14D000E1D94C /* PartyUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -89,7 +85,6 @@
 			packageProductDependencies = (
 				CC485409300BC5A0007D98D0 /* ZIPFoundation */,
 				159AC6AD301B14D000E1D94C /* PartyUI */,
-				15FE6F78301BEF0700DEAC9D /* PartyUI */,
 			);
 			productName = Filos;
 			productReference = 1531758F30094354008A92CE /* Filos.app */;
@@ -121,7 +116,6 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				CC485408300BC5A0007D98D0 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
-				15FE6F77301BEF0700DEAC9D /* XCRemoteSwiftPackageReference "PartyUI" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 1531759030094354008A92CE /* Products */;
@@ -277,7 +271,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = HTH7RGGR9D;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -324,7 +318,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = HTH7RGGR9D;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -388,14 +382,6 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		15FE6F77301BEF0700DEAC9D /* XCRemoteSwiftPackageReference "PartyUI" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/jailbreakdotparty/PartyUI.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.2.0;
-			};
-		};
 		CC485408300BC5A0007D98D0 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
@@ -409,11 +395,6 @@
 /* Begin XCSwiftPackageProductDependency section */
 		159AC6AD301B14D000E1D94C /* PartyUI */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = PartyUI;
-		};
-		15FE6F78301BEF0700DEAC9D /* PartyUI */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 15FE6F77301BEF0700DEAC9D /* XCRemoteSwiftPackageReference "PartyUI" */;
 			productName = PartyUI;
 		};
 		CC485409300BC5A0007D98D0 /* ZIPFoundation */ = {

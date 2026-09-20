@@ -6,7 +6,7 @@
 //
 
 import SwiftUI
-import PartyUI
+
 
 struct SettingsView: View {
     @EnvironmentObject var mgr: FilosManager
@@ -35,7 +35,7 @@ struct SettingsView: View {
                         .navigationTitle("Credits")
                     }
                 } header: {
-                    HeaderLabel(text: "About", icon: "info.circle")
+                    HeaderLabel("About", symbol: "info.circle")
                 } footer: {
                     Text("Made with love by [lunginspector](https://github.com/lunginspector) under the [jailbreak.party](https://jailbreak.party) team.\nJoin our [discord](https://jailbreak.party/discord)!")
                 }
@@ -75,7 +75,7 @@ struct SettingsView: View {
                     }
                     Toggle("Consume on Launch", isOn: $consumeOnLaunch)
                 } header: {
-                    HeaderLabel(text: "Sandbox Extension Token", icon: "loupe")
+                    HeaderLabel("Sandbox Extension Token", symbol: "loupe")
                 }
                 
                 Section {
@@ -87,7 +87,7 @@ struct SettingsView: View {
                     Toggle("Hide \"Favorite\" Button", isOn: $hideFavs)
                     Toggle("Hide Dates", isOn: $hideDates)
                 } header: {
-                    HeaderLabel(text: "View Options", icon: "eye")
+                    HeaderLabel("View Options", symbol: "eye")
                 }
                 
                 Section {
@@ -100,7 +100,7 @@ struct SettingsView: View {
                     }
                     Toggle("Monospaced Font", isOn: $useMonospaced)
                 } header: {
-                    HeaderLabel(text: "Text Viewer", icon: "doc.plaintext")
+                    HeaderLabel("Text Viewer", symbol: "doc.plaintext")
                 }
             }
             .navigationTitle("Settings")
@@ -109,7 +109,7 @@ struct SettingsView: View {
                     Button {
                         dismiss()
                     } label: {
-                        ToolbarLabel("Close", icon: "xmark")
+                        ToolbarLabel("Close", symbol: "xmark")
                     }
                 }
             }

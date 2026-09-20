@@ -6,7 +6,7 @@
 //
 
 import SwiftUI
-import PartyUI
+
 
 struct LogView: View {
     @EnvironmentObject var mgr: FilosManager
@@ -74,7 +74,7 @@ struct LogView: View {
                     Button {
                         dismiss()
                     } label: {
-                        ToolbarLabel("Close", icon: "xmark")
+                        ToolbarLabel("Close", symbol: "xmark")
                     }
                 }
             }

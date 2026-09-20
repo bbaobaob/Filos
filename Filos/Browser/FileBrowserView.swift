@@ -6,7 +6,7 @@
 //
 
 import SwiftUI
-import PartyUI
+
 import QuickLook
 
 enum FileSortMode: String, CaseIterable, Codable, Hashable {

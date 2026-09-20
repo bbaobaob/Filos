@@ -6,7 +6,7 @@
 //
 
 import SwiftUI
-import PartyUI
+
 
 struct FavoriteItem: Identifiable, Codable {
     var id: String { path }
@@ -49,7 +49,7 @@ struct FavoritesSheet: View {
                         NavigationLabel(text: "Container")
                     }
                 } header: {
-                    HeaderLabel(text: "Filos", icon: "folder")
+                    HeaderLabel("Filos", symbol: "folder")
                 }
                 
                 if !favList.isEmpty {
@@ -82,7 +82,7 @@ struct FavoritesSheet: View {
                             }
                         }
                     } header: {
-                        HeaderLabel(text: "Favorites", icon: "star")
+                        HeaderLabel("Favorites", symbol: "star")
                     }
                 }
             }
@@ -101,7 +101,7 @@ struct FavoritesSheet: View {
                     Button {
                         dismiss()
                     } label: {
-                        ToolbarLabel("Close", icon: "xmark")
+                        ToolbarLabel("Close", symbol: "xmark")
                     }
                 }
             }
@@ -128,7 +128,7 @@ struct FavoritesSheet: View {
                             Button {
                                 showAddSheet = false
                             } label: {
-                                ToolbarLabel("Cancel", icon: "xmark")
+                                ToolbarLabel("Cancel", symbol: "xmark")
                             }
                         }
                         ToolbarItem(placement: .topBarTrailing) {
@@ -140,7 +140,7 @@ struct FavoritesSheet: View {
                                     showAddSheet = false
                                 }
                             } label: {
-                                ToolbarLabel("Save", icon: "checkmark")
+                                ToolbarLabel("Save", symbol: "checkmark")
                             }
                         }
                     }

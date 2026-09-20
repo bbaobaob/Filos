@@ -6,7 +6,7 @@
 //
 
 import SwiftUI
-import PartyUI
+
 
 // thanks to skadz108 for this helper
 func sbxConsume(_ token: String) -> Bool {
@@ -78,4 +78,11 @@ extension ButtonRole {
         }
         return nil
     }
+}
+
+let vrs = ProcessInfo.processInfo.operatingSystemVersion
+func doubleSysVrs() -> Double {
+    let pieces = [String(vrs.majorVersion), String(vrs.minorVersion)]
+    let combined = pieces.joined(separator: ".")
+    return Double(combined) ?? 0.0
 }

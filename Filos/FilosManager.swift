@@ -8,7 +8,7 @@
 import SwiftUI
 import UIKit
 import Combine
-import PartyUI
+
 import UniformTypeIdentifiers
 
 enum Errors {

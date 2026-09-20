@@ -1,15 +1,6 @@
 {
-  "originHash" : "dcea731a72a37b5517b7f62b5472b63a08e51a50a80435b9446ca774b3c209c0",
+  "originHash" : "b26c070fd1f0b029780331f3cefa3909a6d58ea6b3ae242bffe49d6011fe06fe",
   "pins" : [
-    {
-      "identity" : "partyui",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/jailbreakdotparty/PartyUI.git",
-      "state" : {
-        "revision" : "015d0b5cc4a8242095cb1791993e4691be4d9f20",
-        "version" : "1.2.1"
-      }
-    },
     {
       "identity" : "zipfoundation",
       "kind" : "remoteSourceControl",

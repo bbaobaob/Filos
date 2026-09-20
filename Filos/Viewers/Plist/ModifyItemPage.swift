@@ -6,7 +6,7 @@
 //
 
 import SwiftUI
-import PartyUI
+
 
 struct ModifyItemPage: View {
     @EnvironmentObject private var pmgr: PlistManager
@@ -33,7 +33,7 @@ struct ModifyItemPage: View {
                 }
                 .disabled(!isEditing)
             } header: {
-                HeaderLabel(text: "Identity", icon: "creditcard")
+                HeaderLabel("Identity", symbol: "creditcard")
             }
             
             Section {
@@ -66,9 +66,9 @@ struct ModifyItemPage: View {
                 }
             } header: {
                 if item.type == .dict || item.type == .array {
-                    HeaderLabel(text: "Value (\(item.dictVal.count) items)", icon: "character.cursor.ibeam")
+                    HeaderLabel("Value (\(item.dictVal.count) items)", symbol: "character.cursor.ibeam")
                 } else {
-                    HeaderLabel(text: "Value", icon: "character.cursor.ibeam")
+                    HeaderLabel("Value", symbol: "character.cursor.ibeam")
                 }
             }
             
@@ -100,7 +100,7 @@ struct ModifyItemPage: View {
                         item = ogItem
                         isEditing = false
                     } label: {
-                        ToolbarLabel("Cancel", icon: "xmark")
+                        ToolbarLabel("Cancel", symbol: "xmark")
                     }
                 }
             }
@@ -117,14 +117,14 @@ struct ModifyItemPage: View {
                         }
                         isEditing = false
                     } label: {
-                        ToolbarLabel("Save", icon: "checkmark")
+                        ToolbarLabel("Save", symbol: "checkmark")
                     }
                 } else {
                     if pmgr.isWritable {
                         Button {
                             isEditing = true
                         } label: {
-                            ToolbarLabel("Edit", icon: "pencil")
+                            ToolbarLabel("Edit", symbol: "pencil")
                         }
                     }
                 }
