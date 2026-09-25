@@ -67,7 +67,6 @@ struct FolderRow: View {
                 } label: {
                     Label("Quick Look", systemImage: "eye")
                 }
-                Divider()
             }
             
             Button {
@@ -76,13 +75,42 @@ struct FolderRow: View {
                 Label("Get Info", systemImage: "info.circle")
             }
             
+            Divider()
+            
             if parent.writable && item.readable {
                 Button {
-                    let res = zipFile(item.fileURL)
-                    if res {
-                        mgr.refreshFiles.toggle()
+                    Alertinator.shared.prompt(title: "What would you like to rename this folder to?", text: item.fileURL.lastPathComponent) { res in
+                        if let newName = res {
+                            do {
+                                let newFolderURL = item.fileURL.deletingLastPathComponent().appendingPathComponent(newName)
+                                if fm.fileExists(atPath: newFolderURL.path) {
+                                    throw "A folder with the same name already exists here."
+                                }
+                                try fm.createDirectory(at: newFolderURL, withIntermediateDirectories: true)
+                                let folderURLs = try fm.contentsOfDirectory(at: item.fileURL, includingPropertiesForKeys: [])
+                                for url in folderURLs {
+                                    try fm.moveItem(at: url, to: newFolderURL.appendingPathComponent(url.lastPathComponent))
+                                }
+                                try fm.removeItem(at: item.fileURL)
+                                mgr.refreshFiles.toggle()
+                            } catch {
+                                print("[!] failed to rename folder: \(error)")
+                                Alertinator.shared.alert(title: "Failed to rename folder!", body: "\(error)")
+                            }
+                        }
+                    }
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+                
+                Button {
+                    if !fm.fileExists(atPath: item.fileURL.appendingPathExtension("zip").path) {
+                        let res = zipFile(item.fileURL)
+                        if res {
+                            mgr.refreshFiles.toggle()
+                        }
                     } else {
-                        Alertinator.shared.alert(title: "Failed to compress file!", body: Errors.checkLogs)
+                        Alertinator.shared.alert(title: "Failed to comrpess file!", body: "An archive with the same name already exists here.")
                     }
                 } label: {
                     Label("Compress", systemImage: "archivebox")
@@ -105,6 +133,35 @@ struct FolderRow: View {
             }
             
             Button {
+                Alertinator.shared.prompt(title: "Where would you like to move this folder to?") { res in
+                    if let path = res {
+                        do {
+                            let newFolderURL = URL(fileURLWithPath: path).appendingPathComponent(item.fileURL.lastPathComponent)
+                            if fm.fileExists(atPath: newFolderURL.path) {
+                                throw "A folder with the same name already exists in that destination."
+                            }
+                            let info = getFileItem(at: item.fileURL)
+                            if info.uttype != .folder {
+                                throw "The destination URL is not a folder."
+                            }
+                            try fm.createDirectory(at: newFolderURL, withIntermediateDirectories: true)
+                            let folderURLs = try fm.contentsOfDirectory(at: item.fileURL, includingPropertiesForKeys: [])
+                            for url in folderURLs {
+                                try fm.moveItem(at: url, to: newFolderURL.appendingPathComponent(url.lastPathComponent))
+                            }
+                            try fm.removeItem(at: item.fileURL)
+                            mgr.refreshFiles.toggle()
+                        } catch {
+                            print("[!] failed to move folder: \(error)")
+                            Alertinator.shared.alert(title: "Failed to move folder!", body: "\(error)")
+                        }
+                    }
+                }
+            } label: {
+                Label("Move", systemImage: "rectangle.portrait.and.arrow.right")
+            }
+            
+            Button {
                 if let url = makeTemp(item.fileURL) {
                     presentShareSheet(with: url)
                 }
@@ -113,7 +170,6 @@ struct FolderRow: View {
             }
             
             if item.writable {
-                Divider()
                 Button(role: .destructive) {
                     try? fm.removeItem(at: item.fileURL)
                     mgr.refreshFiles.toggle()

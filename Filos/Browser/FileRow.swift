@@ -121,8 +121,8 @@ struct FileRow: View {
         }
         // MARK: cell actions
         .contextMenu {
-            if conformsText || conformsPlist {
-                if parent.readable {
+            if parent.readable {
+                if conformsText || conformsPlist {
                     Menu {
                         Button {
                             previewer = FBPreviewer(type: .quickLook, file: item)
@@ -155,7 +155,6 @@ struct FileRow: View {
                         Label("Quick Look", systemImage: "eye")
                     }
                 }
-                Divider()
             }
             
             Button {
@@ -164,9 +163,11 @@ struct FileRow: View {
                 Label("Get Info", systemImage: "info.circle")
             }
             
+            Divider()
+            
             if item.type == .file && parent.writable && item.readable {
                 Button {
-                    Alertinator.shared.prompt(title: "What would you like to call this file?", placeholder: item.name, completion: { result in
+                    Alertinator.shared.prompt(title: "What would you like to call this file?", text: item.name, completion: { result in
                         if let name = result {
                             let res = renameFile(item.fileURL, to: name)
                             if res {
@@ -184,22 +185,26 @@ struct FileRow: View {
             if item.type == .file && parent.writable && item.readable {
                 if conformsZip {
                     Button {
-                        let res = unzipFile(item.fileURL)
-                        if res {
-                            mgr.refreshFiles.toggle()
+                        if !fm.fileExists(atPath: item.fileURL.deletingPathExtension().path) {
+                            let res = unzipFile(item.fileURL)
+                            if res {
+                                mgr.refreshFiles.toggle()
+                            }
                         } else {
-                            Haptic.shared.play(.heavy)
+                            Alertinator.shared.alert(title: "Failed to uncompress file!", body: "An item with the same name already exists here.")
                         }
                     } label: {
                         Label("Uncompress", systemImage: "archivebox")
                     }
                 } else {
                     Button {
-                        let res = zipFile(item.fileURL)
-                        if res {
-                            mgr.refreshFiles.toggle()
+                        if !fm.fileExists(atPath: item.fileURL.appendingPathExtension("zip").path) {
+                            let res = zipFile(item.fileURL)
+                            if res {
+                                mgr.refreshFiles.toggle()
+                            }
                         } else {
-                            Alertinator.shared.alert(title: "Failed to compress file!", body: Errors.checkLogs)
+                            Alertinator.shared.alert(title: "Failed to comrpess file!", body: "An archive with the same name already exists here.")
                         }
                     } label: {
                         Label("Compress", systemImage: "archivebox")
@@ -220,6 +225,8 @@ struct FileRow: View {
                 }
             }
             
+            Divider()
+            
             Button {
                 let res = copyFileToClipboard(item.fileURL)
                 if !res {
@@ -227,6 +234,28 @@ struct FileRow: View {
                 }
             } label: {
                 Label("Copy", systemImage: "doc.on.doc")
+            }
+            
+            if item.readable {
+                Button {
+                    Alertinator.shared.prompt(title: "Where would you like to move this file to?") { res in
+                        if let path = res {
+                            do {
+                                let targetURL = URL(fileURLWithPath: path).appendingPathComponent(item.fileURL.lastPathComponent)
+                                try fm.copyItem(at: item.fileURL, to: targetURL)
+                                Alertinator.shared.alert(title: "Successfully moved file!", body: "Would you like to delete the original file?", actionLabel: "Yes", action: {
+                                    try? fm.removeItem(at: item.fileURL)
+                                    mgr.refreshFiles.toggle()
+                                })
+                            } catch {
+                                print("[!] failed to copy file: \(error.localizedDescription)")
+                                Haptic.shared.play(.heavy)
+                            }
+                        }
+                    }
+                } label: {
+                    Label("Move", systemImage: "rectangle.portrait.and.arrow.right")
+                }
             }
             
             Button {
@@ -238,7 +267,6 @@ struct FileRow: View {
             }
             
             if item.writable {
-                Divider()
                 Button(role: .destructive) {
                     do {
                         try fm.removeItem(at: item.fileURL)
@@ -260,11 +288,13 @@ struct FileRow: View {
             mgr.push(item.destURL)
         } else {
             if conformsZip {
-                let res = unzipFile(item.fileURL)
-                if res {
-                    mgr.refreshFiles.toggle()
+                if !fm.fileExists(atPath: item.fileURL.deletingPathExtension().path) {
+                    let res = unzipFile(item.fileURL)
+                    if res {
+                        mgr.refreshFiles.toggle()
+                    }
                 } else {
-                    Haptic.shared.play(.heavy)
+                    Alertinator.shared.alert(title: "Failed to uncompress file!", body: "An item with the same name already exists here.")
                 }
             } else {
                 if conformsPlist {

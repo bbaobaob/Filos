@@ -25,22 +25,6 @@ struct SettingsView: View {
         NavigationView {
             List {
                 Section {
-                    AppInfoCell(build: "Release")
-                    NavigationLink("Credits") {
-                        List {
-                            LinkCreditCell(image: Image("lunginspector"), name: "lunginspector", description: "Primary developer.", url: "https://github.com/lunginspector")
-                            LinkCreditCell(image: Image("skadz"), name: "Skadz", description: "SBX-related stuff and some file browser things.", url: "https://github.com/skadz108")
-                            LinkCreditCell(image: Image("roooot"), name: "roooot", description: "Archiving utilities.", url: "https://github.com/rooootdev")
-                        }
-                        .navigationTitle("Credits")
-                    }
-                } header: {
-                    HeaderLabel("About", symbol: "info.circle")
-                } footer: {
-                    Text("Made with love by [lunginspector](https://github.com/lunginspector) under the [jailbreak.party](https://jailbreak.party) team.\nJoin our [discord](https://jailbreak.party/discord)!")
-                }
-                
-                Section {
                     TextField("Token", text: $sbxToken)
                         .onLongPressGesture {
                             UIPasteboard.general.string = sbxToken
@@ -101,6 +85,22 @@ struct SettingsView: View {
                     Toggle("Monospaced Font", isOn: $useMonospaced)
                 } header: {
                     HeaderLabel("Text Viewer", symbol: "doc.plaintext")
+                }
+                
+                Section {
+                    AppInfoCell(build: "Release")
+                } header: {
+                    HeaderLabel("About", symbol: "info.circle")
+                } footer: {
+                    Text("Made with love by [jailbreak.party](https://jailbreak.party) team.\nNeed support or want to know about new releases? Join our [Discord server!](https://jailbreak.party/discord)")
+                }
+                
+                Section {
+                    LinkCreditCell(image: Image("lunginspector"), name: "lunginspector", description: "Primary developer.", url: "https://github.com/lunginspector")
+                    LinkCreditCell(image: Image("skadz"), name: "Skadz", description: "SBX-related stuff and some file browser things.", url: "https://github.com/skadz108")
+                    LinkCreditCell(image: Image("roooot"), name: "roooot", description: "Archiving utilities.", url: "https://github.com/rooootdev")
+                } header: {
+                    HeaderLabel("Credits", symbol: "star")
                 }
             }
             .navigationTitle("Settings")
