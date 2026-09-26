@@ -84,7 +84,6 @@
 			name = Filos;
 			packageProductDependencies = (
 				CC485409300BC5A0007D98D0 /* ZIPFoundation */,
-				159AC6AD301B14D000E1D94C /* PartyUI */,
 			);
 			productName = Filos;
 			productReference = 1531758F30094354008A92CE /* Filos.app */;
@@ -271,7 +270,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = HTH7RGGR9D;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -318,7 +317,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = HTH7RGGR9D;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -393,10 +392,6 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		159AC6AD301B14D000E1D94C /* PartyUI */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = PartyUI;
-		};
 		CC485409300BC5A0007D98D0 /* ZIPFoundation */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = CC485408300BC5A0007D98D0 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;

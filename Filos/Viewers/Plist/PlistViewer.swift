@@ -35,6 +35,7 @@ struct PlistViewer: View {
             .navigationTitle(file.fileURL.lastPathComponent)
             .navigationBarTitleDisplayMode(.inline)
             .listStyle(.inset)
+            .noRefreshable()
             .safeAreaInset(edge: .bottom) {
                 if !pmgr.isWritable {
                     HStack {

@@ -7,3 +7,7 @@ packages/
 pairing/
 build/
 xcuserdata/
+*.ipa
+*.deb
+entitlements.plist
+package-root

@@ -24,17 +24,19 @@ struct FolderRow: View {
         } label: {
             HStack(spacing: fileRowSpacing) {
                 Group {
-                    if folderType == .bundle || folderType == .container {
+                    if fm.fileExists(atPath: item.fileURL.appendingPathComponent(".com.apple.mobile_container_manager.metadata.plist").path) || fm.fileExists(atPath: item.fileURL.appendingPathComponent("Info.plist").path) {
                         Image(systemName: "app")
                             .frame(width: 20, alignment: .center)
                         VStack(alignment: .leading) {
-                            Text(folderLabel(url: item.fileURL))
+                            Text(getNameFromInfP(item.fileURL) ?? getBIDFromMCM(item.fileURL) ?? item.name)
                                 .foregroundStyle(item.hidden ? .secondary : .primary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
-                            Text(item.fileURL.path)
+                            Text(item.fileURL.lastPathComponent)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                         }
                     } else {
                         Image(systemName: "folder")
@@ -42,6 +44,7 @@ struct FolderRow: View {
                             .foregroundStyle(item.hidden ? .secondary : .primary)
                         Text(item.name)
                             .lineLimit(1)
+                            .truncationMode(.middle)
                             .foregroundStyle(item.hidden ? .secondary : .primary)
                     }
                 }

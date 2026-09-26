@@ -46,6 +46,7 @@ struct TextViewer: View {
             .navigationTitle(fileURL.deletingPathExtension().lastPathComponent)
             .navigationBarTitleDisplayMode(.inline)
             .listStyle(.insetGrouped)
+            .noRefreshable()
             .safeAreaInset(edge: .bottom) {
                 if !file.writable {
                     HStack {

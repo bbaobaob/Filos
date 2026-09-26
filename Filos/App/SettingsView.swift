@@ -104,6 +104,7 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .noRefreshable()
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {

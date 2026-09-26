@@ -88,6 +88,7 @@ struct FavoritesSheet: View {
             }
             .navigationTitle("Favorites")
             .navigationBarTitleDisplayMode(.inline)
+            .noRefreshable()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
@@ -123,6 +124,7 @@ struct FavoritesSheet: View {
                     }
                     .navigationTitle("Add Item")
                     .navigationBarTitleDisplayMode(.inline)
+                    .noRefreshable()
                     .toolbar {
                         ToolbarItem(placement: .topBarLeading) {
                             Button {

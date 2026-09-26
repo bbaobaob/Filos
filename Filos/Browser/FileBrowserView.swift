@@ -88,6 +88,7 @@ struct FileBrowserView: View {
                         }
                     }
                 }
+                .searchable(text: $searchText)
             } else {
                 VStack(spacing: 8) {
                     Image(systemName: currentState.symbol)
@@ -111,7 +112,6 @@ struct FileBrowserView: View {
         .navigationBarTitleDisplayMode(.inline)
         .customListStyle(listStyle)
         .adaptiveListMargin()
-        .searchable(text: $searchText)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -405,24 +405,6 @@ struct FileBrowserView: View {
         case .failure(let error):
             print("(fm) failed to import file: \(error)")
             Alertinator.shared.alert(title: "Failed to import file!", body: "\(error)")
-        }
-    }
-}
-
-extension View {
-    @ViewBuilder
-    func customListStyle(_ selection: Int) -> some View {
-        switch selection {
-        case 2: self.listStyle(.inset)
-        case 3: self.listStyle(.grouped)
-        default: self.listStyle(.insetGrouped)
-        }
-    }
-    
-    @ViewBuilder
-    func adaptiveListMargin() -> some View {
-        if #available(iOS 26.0, *) {
-            self.contentMargins(.top, 0)
         }
     }
 }

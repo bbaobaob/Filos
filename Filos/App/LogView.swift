@@ -36,6 +36,7 @@ struct LogView: View {
             }
             .navigationTitle("Logs")
             .navigationBarTitleDisplayMode(.inline)
+            .noRefreshable()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {

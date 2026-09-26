@@ -87,6 +87,7 @@ struct ModifyItemPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(isEditing)
         .listStyle(.grouped)
+        .noRefreshable()
         .onAppear {
             Task {
                 let plistItem = pmgr.plistArray.first(where: { $0.id == item.id }) ?? item

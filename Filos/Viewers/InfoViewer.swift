@@ -53,6 +53,8 @@ struct InfoViewer: View {
             }
             .navigationTitle("\(file.type.rawValue.capitalized) Info")
             .navigationBarTitleDisplayMode(.inline)
+            .adaptiveListMargin()
+            .noRefreshable()
             .listStyle(.insetGrouped)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
