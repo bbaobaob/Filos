@@ -74,7 +74,7 @@ struct FileRow: View {
                     Image(systemName: "info.circle")
                 }
                 .buttonStyle(.plain)
-                Chevron()
+                .foregroundStyle(item.hidden ? .secondary : .primary)
             }
         }
         .swipeActions {
