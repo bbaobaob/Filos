@@ -10,10 +10,10 @@
   <a href="https://jailbreak.party"><img alt="Static Badge" src="https://img.shields.io/badge/jailbreak.party-blue?style=flat-square&label=%20&color=3868DB"></a>
 </div>
 
-## What's the purpose of Filos?
-- Filza is outdated, requires a license, and is not open-source. This project intends to serve as a replacement for that, but this file manager is way more limited in scope than Filza is. Think of this as a really basic file manager app and don't expect many of the same features that Filza or other file manager apps alike have. Maybe a better version of Santander would be a good way to describe this?
-- Expect basic file management tools, a plist editor, and a text editor. You can also create symlinks and property lists, as well.
+## So what is Filos, anyways?
+- Filos is a modern and open-source file manager that's primarily designed for developers. It was written in pure Swift for iOS 15 and later, so it supports a wide range of iOS versions and is great for tinkering, testing exploits, or basic file management on jailbreaks. There's no FTP, jailbreak-related package tools, or other things you'd expect in things like Filza. Just all the file operations you'd need, and a plist/text editor.
 
-## Installation
-- You will need a device running iOS/iPadOS 15.0 or later, as well as a sideloading method of your choice.
-- If you'd like to build and tinker with this project for yourself (human-written pull requests are highly encouraged!), then make sure you have Xcode 26.2 or later.
+## Tinkering
+- You'll need Xcode 26.2 or later, as well as the iOS 26 (or newer) SDK to play around with this.
+- Also included is the `ipabuild.sh` file, which only requires that you have xcodebuild (obviously).
+- If you'd like to build for TrollStore or a jailbreak, you'll need to link the `entitlements.plist` file to the built project with ldid.
