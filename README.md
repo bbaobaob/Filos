@@ -10,10 +10,18 @@
   <a href="https://jailbreak.party"><img alt="Static Badge" src="https://img.shields.io/badge/jailbreak.party-blue?style=flat-square&label=%20&color=3868DB"></a>
 </div>
 
-## So what is Filos, anyways?
-- Filos is a modern and open-source file manager that's primarily designed for developers. It was written in pure Swift for iOS 15 and later, so it supports a wide range of iOS versions and is great for tinkering, testing exploits, or basic file management on jailbreaks. There's no FTP, jailbreak-related package tools, or other things you'd expect in things like Filza. Just all the file operations you'd need, and a plist/text editor.
+## Important Information
+- Filos is a modern and open-source file manager that's primarily designed for developers. It was written in pure Swift for iOS 15 and later, so it supports a wide range of iOS versions and is great for tinkering or basic file management on jailbroken devices. There's no FTP, package management, or other tools that would be found in file managers like Filza. Filos has all the basic file operations you'd expect, a plist/text editor, and a permissions viewer.
+- **Filos does NOT use any exploits or sandbox escapes.** If you're thinking that this project will give you full r/w on iOS 27.x, think again. This file manager has been designed with developers and jailbreakers in mind.
+- Since Filos relies on entitlements in order to function, it will be inherently more limited on jailbroken devices than any file manager with a root helper would. I may look into adding one in the future, but no promises.
 
-## Tinkering
-- You'll need Xcode 26.2 or later, as well as the iOS 26 (or newer) SDK to play around with this.
-- Also included is the `ipabuild.sh` file, which only requires that you have xcodebuild (obviously).
-- If you'd like to build for TrollStore or a jailbreak, you'll need to link the `entitlements.plist` file to the built project with ldid.
+## Building & Tinkering
+- You'll need Xcode 26.2 or later, as well as the iOS 26 SDK (or newer) to build this project or open it in Xcode.
+- Included are two scripts: `ipabuild.sh` and `debbuild.sh`:
+    - `ipabuild.sh`: By default, will build a jailed .ipa version of Filos. Pass `--debug` for a debug build or `--ts` for a regular TrollStore build.
+    - `debbuild.sh`: Will build a jailbroken distribution version of Filos.
+
+## Credits
+- [lunginspector](https://github.com/lunginspector): Primary developer and maintainer.
+- [skadz108](https://github.com/skadz108): SBX-related stuff and some file browser components.
+- [rooootdev](https://github.com/rooootdev): Archive utilities.
