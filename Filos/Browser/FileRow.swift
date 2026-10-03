@@ -46,6 +46,7 @@ struct FileRow: View {
             HStack(spacing: fileRowSpacing) {
                 Image(systemName: item.type == .file ? "doc" : "arrow.up.right.circle")
                     .foregroundStyle(item.hidden ? .secondary : .primary)
+                    .frame(width: 20, alignment: .center)
                 
                 VStack(alignment: .leading) {
                     Text(item.name)
@@ -74,7 +75,12 @@ struct FileRow: View {
                     Image(systemName: "info.circle")
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(item.hidden ? .secondary : .primary)
+                .foregroundStyle(Color.accentColor)
+                .opacity(item.hidden ? 0.8 : 1.0)
+                
+                if item.type == .symlink {
+                    Chevron()
+                }
             }
         }
         .swipeActions {

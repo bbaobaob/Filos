@@ -31,19 +31,19 @@ struct AppIconCell: View {
             image
                 .resizable()
                 .scaledToFit()
-                .frame(width: 64, height: 64)
+                .frame(width: 55, height: 55)
                 .background(PlaceholderAppIconCell())
-                .clipShape(.rect(cornerRadius: 18))
-                .glassEffect(.regular, in: .rect(cornerRadius: 18))
+                .clipShape(.rect(cornerRadius: 16))
+                .glassEffect(.regular, in: .rect(cornerRadius: 16))
         } else {
             image
                 .resizable()
                 .scaledToFit()
-                .frame(width: 64, height: 64)
+                .frame(width: 55, height: 55)
                 .background(PlaceholderAppIconCell())
-                .clipShape(.rect(cornerRadius: 14))
+                .clipShape(.rect(cornerRadius: 12))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 14)
+                    RoundedRectangle(cornerRadius: 12)
                         .stroke(Color.secondary.opacity(0.2), lineWidth: 1.5)
                 }
         }
@@ -54,7 +54,7 @@ struct PlaceholderAppIconCell: View {
     var body: some View {
         Image(systemName: "questionmark.square")
             .foregroundStyle(.secondary)
-            .frame(width: 64, height: 64)
+            .frame(width: 55, height: 55)
             .background(Color(.systemGray5))
     }
 }

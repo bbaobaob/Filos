@@ -8,6 +8,10 @@ APPLICATION_NAME=Filos
 
 echo "[*] $APPLICATION_NAME Build Script"
 
+if [[ $* == *--ts* ]]; then
+    echo "[!] Make sure that ldid is installed before building!"
+fi
+
 rm -rf build
 
 if ls *.ipa 1> /dev/null 2>&1; then
@@ -58,6 +62,15 @@ if [ -e "$TARGET_APP/embedded.mobileprovision" ]; then
     rm -rf "$TARGET_APP/embedded.mobileprovision"
 fi
 
+if [[ $* == *--ts* ]]; then
+    echo "[*] Linking entitlements..."
+    ldid -S"$WORKING_LOCATION/entitlements.plist" "$TARGET_APP"
+fi
+
+echo "[*] Getting Info.plist values..."
+INFO_PLIST="$TARGET_APP/Info.plist"
+APP_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$INFO_PLIST")
+
 echo "[*] Packaging..."
 mkdir Payload
 cp -r $APPLICATION_NAME.app Payload/$APPLICATION_NAME.app
@@ -68,8 +81,10 @@ rm -rf Payload
 
 cd ..
 if [[ $* == *--debug* ]]; then
-mv "$WORKING_LOCATION/build/$APPLICATION_NAME.ipa" ./$APPLICATION_NAME.debug.ipa
+mv "$WORKING_LOCATION/build/$APPLICATION_NAME.ipa" ./"${APPLICATION_NAME}_${APP_VERSION}_debug".ipa
+elif [[ $* == *--ts* ]]; then
+mv "$WORKING_LOCATION/build/$APPLICATION_NAME.ipa" ./"${APPLICATION_NAME}_${APP_VERSION}_trollstore".ipa
 else
-mv "$WORKING_LOCATION/build/$APPLICATION_NAME.ipa" .
+mv "$WORKING_LOCATION/build/$APPLICATION_NAME.ipa" ./"${APPLICATION_NAME}_${APP_VERSION}_release".ipa
 fi
 rm -rf "$WORKING_LOCATION/build/"

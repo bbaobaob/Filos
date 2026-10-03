@@ -89,21 +89,22 @@ struct SettingsView: View {
                 
                 Section {
                     AppInfoCell(build: "Release")
+                    NavigationLink("Credits") {
+                        List {
+                            LinkCreditCell(image: Image("lunginspector"), name: "lunginspector", description: "Primary developer.", url: "https://github.com/lunginspector")
+                            LinkCreditCell(image: Image("skadz"), name: "Skadz", description: "SBX-related stuff and some file browser things.", url: "https://github.com/skadz108")
+                            LinkCreditCell(image: Image("roooot"), name: "roooot", description: "Archiving utilities.", url: "https://github.com/rooootdev")
+                        }
+                        .navigationTitle("Credits")
+                    }
                 } header: {
                     HeaderLabel("About", symbol: "info.circle")
                 } footer: {
-                    Text("Made with love by [jailbreak.party](https://jailbreak.party) team.\nNeed support or want to know about new releases? Join our [Discord server!](https://jailbreak.party/discord)")
-                }
-                
-                Section {
-                    LinkCreditCell(image: Image("lunginspector"), name: "lunginspector", description: "Primary developer.", url: "https://github.com/lunginspector")
-                    LinkCreditCell(image: Image("skadz"), name: "Skadz", description: "SBX-related stuff and some file browser things.", url: "https://github.com/skadz108")
-                    LinkCreditCell(image: Image("roooot"), name: "roooot", description: "Archiving utilities.", url: "https://github.com/rooootdev")
-                } header: {
-                    HeaderLabel("Credits", symbol: "star")
+                    Text("Made with love by [jailbreak.party](https://jailbreak.party) team.\nNeed support? Join our [Discord server!](https://jailbreak.party/discord)")
                 }
             }
             .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
             .noRefreshable()
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

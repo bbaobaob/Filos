@@ -57,7 +57,8 @@ struct FolderRow: View {
                     Image(systemName: "info.circle")
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(item.hidden ? .secondary : .primary)
+                .foregroundStyle(Color.accentColor)
+                .opacity(item.hidden ? 0.8 : 1.0)
                 
                 Chevron()
             }
