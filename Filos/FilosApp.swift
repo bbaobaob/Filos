@@ -9,6 +9,7 @@ import SwiftUI
 import AirliftFFI
 
 import UniformTypeIdentifiers
+import UserNotifications
 
 var weOnADebugBuild: Bool = false
 var pipe = Pipe()
@@ -39,6 +40,10 @@ struct FilosApp: App {
 
         // Ensure the Grappa helper symbol is retained and linked into the binary.
         _ = ALGetGrappaToken(0, 0, 0, nil, 0, nil, nil, 0)
+
+        // Ask for notification permission up front so the pairing PIN prompt can
+        // be delivered while the user is away inside Settings.
+        FilosNotifications.requestAuthorization()
 
         #if DEBUG
         weOnADebugBuild = true
@@ -72,7 +77,13 @@ struct FilosApp: App {
                     
                     print("[*] Filos v0.1 (Release)")
                     print("[*] Running on \(UIDevice.current.systemName) \(UIDevice.current.systemVersion), \(machineName())")
-                    
+
+                    // Airlift runs itself on launch using the persisted pairing
+                    // file. This never triggers a pairing round on its own.
+                    Task { @MainActor in
+                        AirLiftModel.shared.runOnLaunch()
+                    }
+
                     if consumeOnLaunch && !sbxToken.isEmpty {
                         mgr.tokenVaild = sbxConsume(sbxToken)
                         

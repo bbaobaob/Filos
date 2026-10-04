@@ -9,7 +9,7 @@ final class PairingController: ObservableObject {
 
     static let shared = PairingController()
 
-    private let hostName = "AirCard-iOS"
+    private let hostName = "Filos"
     private let hostModel = "Mac17,7"   // device sees a Mac-like pairing host
     private let bindAddress = "0.0.0.0"
 
@@ -45,7 +45,7 @@ final class PairingController: ObservableObject {
         var errorDescription: String? {
             switch self {
             case .busy: return "Pairing is already in progress."
-            case .localNetworkDenied: return "Local Network permission is off. Enable it in Settings › AirCard-iOS › Local Network."
+            case .localNetworkDenied: return "Local Network permission is off. Enable it in Settings › Filos › Local Network."
             case .zeroBytes: return "Pairing produced an empty file. Approve the pairing request, then try again."
             case let .failed(msg): return msg
             }
@@ -72,7 +72,7 @@ final class PairingController: ObservableObject {
         return sourcePath
     }
 
-    /// Deletes every credential copy created or adopted by AirCard and clears the stored AltIRK.
+    /// Deletes every credential copy created or adopted by Filos and clears the stored AltIRK.
     static func deleteStoredPairingCredentials() {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let aircardURL = dir.appendingPathComponent("aircard_pairing.plist")
@@ -264,7 +264,8 @@ final class PairingController: ObservableObject {
 
     fileprivate func presentPin(_ pin: String) {
         pairingPIN = pin
-        pairingStatus = "Enter PIN \(pin) in Settings › Privacy & Security › Developer Mode › Pair with AirCard-iOS"
+        pairingStatus = "Enter PIN \(pin) in Settings › Privacy & Security › Developer Mode › Pair with Filos"
+        FilosNotifications.postPairingPrompt()
     }
 
     private func stopAdvertising() {

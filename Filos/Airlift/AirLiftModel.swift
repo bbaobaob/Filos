@@ -42,11 +42,21 @@ final class AirLiftModel: ObservableObject {
     @Published var isRunning: Bool = false
     @Published var lastResult: String = ""
 
+    /// Compact one-liner shown on the root screen (result of the launch run).
+    @Published var launchStatus: String = ""
+    @Published var launchFailed: Bool = false
+
     /// Mirror of `PairingController`'s published pairing state.
     @Published var pairingStatus: String = ""
     @Published var pairingPIN: String?
+    /// Published mirror of `isPaired` so views re-render after pairing.
+    @Published private(set) var paired: Bool = false
 
     private var pairingObservation: AnyCancellable?
+    private var didRunOnLaunch = false
+
+    /// Lets us nag about pairing exactly once per install.
+    private static let pairPromptShownKey = "airliftPairPromptShown"
 
     /// Absolute iOS directories Airlift can write into.
     static let defaultTargets: [String] = [
@@ -95,6 +105,7 @@ final class AirLiftModel: ObservableObject {
         let controller = PairingController.shared
         pairingStatus = controller.pairingStatus
         pairingPIN = controller.pairingPIN
+        paired = isPaired
     }
 
     // MARK: - Network
@@ -121,6 +132,8 @@ final class AirLiftModel: ObservableObject {
                 refreshPairing()
                 refreshVPN()
                 log("Pairing complete: \(path)")
+                // Credentials are stored now, so make the target dirs usable right away.
+                runAirliftOnLaunchTarget()
             } catch is CancellationError {
                 refreshPairing()
                 log("Pairing cancelled.")
@@ -163,6 +176,8 @@ final class AirLiftModel: ObservableObject {
 
     func deletePairingCredentials() {
         PairingController.deleteStoredPairingCredentials()
+        // Allow the one-time pairing prompt to appear again on the next launch.
+        UserDefaults.standard.set(false, forKey: Self.pairPromptShownKey)
         refreshPairing()
         log("Deleted pairing credentials.")
     }
@@ -208,10 +223,76 @@ final class AirLiftModel: ObservableObject {
 
     // MARK: - Airlift run
 
-    func runAirlift() {
-        guard !isRunning else { return }
+    /// Called once from `FilosApp.onAppear`. Reuses the pairing file that is
+    /// already persisted in Documents and runs airlift against the default
+    /// target. Deliberately never pairs: only the explicit "Pair" button does.
+    func runOnLaunch() {
+        guard !didRunOnLaunch else { return }
+        didRunOnLaunch = true
 
-        let target = selectedTarget
+        refreshPairing()
+
+        let pairingPath = PairingController.pairingFilePath()
+        let size = (try? FileManager.default.attributesOfItem(atPath: pairingPath)[.size] as? Int) ?? 0
+
+        if size > 0 {
+            log("Launch: reusing pairing file \(pairingPath)")
+            runAirliftOnLaunchTarget()
+        } else {
+            log("Launch: no pairing file at \(pairingPath)")
+            promptPairingOnce()
+        }
+    }
+
+    /// Runs airlift on the default target, reporting a brief status either way.
+    private func runAirliftOnLaunchTarget() {
+        let target = selectedTarget.isEmpty ? (Self.defaultTargets.first ?? "/var/mobile") : selectedTarget
+        launchStatus = "Running airlift on \(target)…"
+        launchFailed = false
+
+        let started = runAirlift(target: target) { [weak self] success, detail in
+            guard let self else { return }
+            if success {
+                self.launchStatus = "Airlift ok: \(target)"
+            } else {
+                self.launchStatus = "Airlift failed: \(detail)"
+            }
+            self.launchFailed = !success
+            // Any browser already on screen may have listed files while the
+            // permissions were still missing — reload it.
+            FilosManager.shared.refreshFiles.toggle()
+        }
+
+        if !started {
+            launchStatus = "Airlift already running"
+        }
+    }
+
+    /// One-time "you have to pair first" prompt. Pairing only happens if the
+    /// user taps Pair, and the resulting file is reused on every later launch.
+    private func promptPairingOnce() {
+        guard !UserDefaults.standard.bool(forKey: Self.pairPromptShownKey) else { return }
+        UserDefaults.standard.set(true, forKey: Self.pairPromptShownKey)
+
+        launchStatus = "Not paired yet"
+
+        Alertinator.shared.alert(
+            title: FilosNotifications.pairingTitle,
+            body: "Filos has to be paired once before it can read /var/mobile and the other Airlift locations. Tap Pair, then approve the request in Settings › Developer Mode.",
+            actionLabel: "Pair"
+        ) {
+            AirLiftModel.shared.startPairing()
+        }
+    }
+
+    /// Runs the FFI entry point off the main thread. `completion` is always
+    /// invoked on the main actor with (success, summary).
+    /// Returns false when a run is already in flight.
+    @discardableResult
+    func runAirlift(target targetPath: String? = nil, completion: ((Bool, String) -> Void)? = nil) -> Bool {
+        guard !isRunning else { return false }
+
+        let target = targetPath ?? selectedTarget
         let pairingPath = PairingController.pairingFilePath()
 
         isRunning = true
@@ -255,16 +336,24 @@ final class AirLiftModel: ObservableObject {
                 if rc != 0 {
                     model.log("Airlift exited with rc=\(rc)")
                 }
+
+                let success = rc == 0 && (err?.isEmpty ?? true)
+                let summary = (err?.isEmpty == false ? err! : (json?.isEmpty == false ? json! : "rc=\(rc)"))
+                completion?(success, summary)
             }
         }
         thread.name = "Filos.AirLift"
         thread.stackSize = 8 * 1024 * 1024
         thread.qualityOfService = .userInitiated
         thread.start()
+
+        return true
     }
 
     // MARK: - Log
 
+    /// `print` here lands in the stdout pipe that `FilosApp` drains into
+    /// `FilosManager.logOutput`, so every airlift line shows up in LogView.
     private func appendLine(_ line: String) {
         logs.append(line)
         trimLogs()

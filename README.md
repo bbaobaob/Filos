@@ -20,12 +20,16 @@ This fork integrates the **Airlift** capability from [Mak5er/AirCard-iOS](https:
 
 - `rust-core/` — vendored Rust FFI crate (RPPairing host, AirTraffic exploit, syslog stream, Grappa token helper).
 - `AirliftFFI.xcframework` — prebuilt arm64 (device + simulator) static library wrapper. CI rebuilds it from `rust-core/`.
-- `Filos/Airlift/` — Swift side: `AirLiftModel.swift` (FFI bridge), `AirLiftView.swift` (UI), `PairingController.swift`, `NetworkStatus.swift`, `Utilities.swift`, `GrappaHelper.m`.
+- `Filos/Airlift/` — Swift side: `AirLiftModel.swift` (FFI bridge + launch bootstrap), `AirLiftView.swift` (panel UI), `PairingController.swift`, `FilosNotifications.swift` (pairing PIN notification), `NetworkStatus.swift`, `Utilities.swift`, `GrappaHelper.m`.
 - `build-ios.sh` — builds the Rust core for `aarch64-apple-ios` / `aarch64-apple-ios-sim` and repackages `AirliftFFI.xcframework`.
 
-**App entry shows AirLift first.** The root screen is the AirLift panel; the file browser is one tap away behind the "File Browser" toolbar button in the leading position. Sections: LocalDevVPN status, pairing (self-pair over RPPairing, import pair file, delete credentials), Grappa token generation, target path picker, run, result, and log.
+**Root screen is the location list.** On launch Filos shows the Airlift-supported locations listed below; tapping one opens the regular file browser at that path, so everything inside can be viewed, edited, renamed, copied, zipped, shared or deleted as usual. The AirLift panel is one tap away behind the "Airlift" toolbar button (leading) or the ellipsis menu, and from Settings › Airlift; the log view is behind "Logs" in the ellipsis menu or in a file browser's Actions menu. The AirLift panel sections are: LocalDevVPN status, pairing (self-pair over RPPairing, import pair file, delete credentials), Grappa token generation, target path picker, run, result, and log.
 
-**Target paths shown on entry:**
+**Airlift runs itself on launch.** `FilosApp.onAppear` asks `PairingController.pairingFilePath()` for the persisted credentials in `Documents/aircard_pairing.plist`. If a non-empty pairing file exists, Filos calls `al_exploit_run(pairing, "/var/mobile")` off the main thread and streams the log into `FilosManager.logOutput` (visible in Logs). A brief success/failure line shows on the root screen. Filos never pairs automatically: if no pairing file exists yet, a one-time prompt offers to pair, and the resulting file is reused on every later launch. Pairing again only happens when you tap Pair in the AirLift panel, or after deleting the stored credentials.
+
+**Notifications.** Authorization for alerts, badges and sounds is requested early, and when RPPairing needs a PIN a local notification titled "Pairing required" is posted (the user is normally inside Settings at that point).
+
+**Target paths listed on the root screen:**
 
 ```
 /var/mobile

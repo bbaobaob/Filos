@@ -88,6 +88,18 @@ struct SettingsView: View {
                 }
                 
                 Section {
+                    NavigationLink {
+                        AirLiftView()
+                    } label: {
+                        ButtonLabel(text: "Airlift", symbol: "airplane")
+                    }
+                } header: {
+                    HeaderLabel("Airlift", symbol: "airplane")
+                } footer: {
+                    Text("Airlift runs automatically on launch using the stored pairing file. Pairing only happens when you tap Pair here.")
+                }
+
+                Section {
                     AppInfoCell(build: "Release")
                     NavigationLink("Credits") {
                         List {

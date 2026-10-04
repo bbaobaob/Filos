@@ -9,31 +9,11 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var mgr: FilosManager
-    @State private var showBrowser = false
 
     var body: some View {
         NavigationView {
-            AirLiftView()
+            RootLocationsView()
                 .environmentObject(mgr)
-                .navigationTitle("AirLift")
-                .background {
-                    NavigationLink(
-                        destination: FileBrowserContainer(level: 0, url: URL(fileURLWithPath: "/"))
-                            .environmentObject(mgr),
-                        isActive: $showBrowser
-                    ) {
-                        EmptyView()
-                    }
-                }
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            showBrowser = true
-                        } label: {
-                            Label("File Browser", systemImage: "folder")
-                        }
-                    }
-                }
         }
         .navigationViewStyle(.stack)
     }

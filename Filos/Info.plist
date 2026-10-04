@@ -39,10 +39,13 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<!-- Background: audio keeps the app alive while the user approves the PIN -->
+	<!-- Background: audio keeps the app alive while the user approves the PIN;
+	     remote-notification lets the pairing PIN prompt be delivered as a
+	     local notification while the app sits in the background. -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+		<string>remote-notification</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>

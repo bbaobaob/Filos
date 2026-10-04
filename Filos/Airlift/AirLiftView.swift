@@ -2,7 +2,8 @@
 //  AirLiftView.swift
 //  Filos
 //
-//  Root screen: LocalDevVPN + pairing + Airlift target paths.
+//  Airlift panel: LocalDevVPN + pairing + Airlift target paths.
+//  Reached from the root screen toolbar / Settings.
 //
 
 import SwiftUI
@@ -22,7 +23,7 @@ struct AirLiftView: View {
                         Text("AirLift")
                             .font(.title2.weight(.semibold))
                     }
-                    Text("Pair this device over RPPairing, then run Airlift against an iOS directory on the device.")
+                    Text("Filos pairs with this device over RPPairing and runs Airlift automatically on launch. Use this panel to re-pair, pick a different target, or inspect the log.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
