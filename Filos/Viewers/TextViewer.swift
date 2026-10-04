@@ -57,7 +57,7 @@ struct TextViewer: View {
                             Image(systemName: "lock")
                                 .padding(10)
                         }
-                        .foregroundStyle(.accent)
+                        .foregroundStyle(Color.accentColor)
                         .padding(.trailing)
                         .ignoresSafeArea()
                     }

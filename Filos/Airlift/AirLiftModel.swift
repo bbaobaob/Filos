@@ -171,7 +171,8 @@ final class AirLiftModel: ObservableObject {
 
     /// Calls `ALGetGrappaToken` (dlsym'd out of the app, same as rust's grappa.rs).
     func generateGrappa() {
-        guard let symbol = dlsym(RTLD_DEFAULT, "ALGetGrappaToken") else {
+        let mainHandle = dlopen(nil, RTLD_NOW)
+        guard let symbol = dlsym(mainHandle, "ALGetGrappaToken") else {
             log("Grappa generate: failed (ALGetGrappaToken symbol not found)")
             return
         }
