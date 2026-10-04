@@ -133,7 +133,7 @@ final class AirLiftModel: ObservableObject {
                 refreshVPN()
                 log("Pairing complete: \(path)")
                 // Credentials are stored now, so make the target dirs usable right away.
-                runAirliftOnLaunchTarget()
+                warmBrowseCache()
             } catch is CancellationError {
                 refreshPairing()
                 log("Pairing cancelled.")
@@ -223,9 +223,19 @@ final class AirLiftModel: ObservableObject {
 
     // MARK: - Airlift run
 
-    /// Called once from `FilosApp.onAppear`. Reuses the pairing file that is
-    /// already persisted in Documents and runs airlift against the default
-    /// target. Deliberately never pairs: only the explicit "Pair" button does.
+    /// Called once from `FilosApp.onAppear`.
+    ///
+    /// Launch is deliberately *browse-ready* only: it checks that a pairing
+    /// file exists, drops the cached listings and warms the InstallationProxy
+    /// app list so the Application root opens immediately. It never runs
+    /// `al_exploit_run`.
+    ///
+    /// Reason: the AirTraffic exploit moves data between the device and the
+    /// Books sync zone (`Books.plist`, `Airlock/`, `OutstandingAssets` sqlite).
+    /// Interrupting that transfer leaves those files dirty and the device can
+    /// then sign apps out or show update/password prompts. Listing files has no
+    /// business touching that machinery, so it never does — the exploit is only
+    /// reachable from the explicit self-test button (`runExploitOnce()`).
     func runOnLaunch() {
         guard !didRunOnLaunch else { return }
         didRunOnLaunch = true
@@ -237,34 +247,77 @@ final class AirLiftModel: ObservableObject {
 
         if size > 0 {
             log("Launch: reusing pairing file \(pairingPath)")
-            runAirliftOnLaunchTarget()
+            warmBrowseCache()
         } else {
             log("Launch: no pairing file at \(pairingPath)")
             promptPairingOnce()
         }
     }
 
-    /// Runs airlift on the default target, reporting a brief status either way.
-    private func runAirliftOnLaunchTarget() {
-        let target = selectedTarget.isEmpty ? (Self.defaultTargets.first ?? "/var/mobile") : selectedTarget
-        launchStatus = "Running airlift on \(target)…"
+    /// Clears stale listings and pulls the installed-app list off the main
+    /// thread. HouseArrest/AFC only — no AirTraffic sync, no Books mutation.
+    private func warmBrowseCache() {
+        paired = true
+        AirLiftBrowse.shared.invalidateCache()
+
+        let browse = AirLiftBrowse.shared
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let count = (try? browse.listApps().count) ?? 0
+            Task { @MainActor in
+                guard let self else { return }
+                self.launchStatus = "ready"
+                self.launchFailed = false
+                self.log("launch: browse-ready mode (exploit not run automatically)")
+                if count > 0 {
+                    self.log("launch: warmed \(count) app containers")
+                }
+                // Any browser already on screen may have listed files against a
+                // stale cache — reload it.
+                FilosManager.shared.refreshFiles.toggle()
+            }
+        }
+    }
+
+    /// Manual, single-shot self-test: runs the AirTraffic canary write exactly
+    /// once, on explicit user request only. Never called from the browsing path.
+    @discardableResult
+    func runExploitOnce(target targetPath: String? = nil) -> Bool {
+        let target = targetPath ?? (selectedTarget.isEmpty ? (Self.defaultTargets.first ?? "/var/mobile") : selectedTarget)
+
+        log("Self-test: running Airlift exploit on \(target) (AirTraffic canary write, manual only)")
+        launchStatus = "Running Airlift self-test on \(target)…"
         launchFailed = false
 
         let started = runAirlift(target: target) { [weak self] success, detail in
             guard let self else { return }
             if success {
-                self.launchStatus = "Airlift ok: \(target)"
+                self.launchStatus = "Self-test ok: \(target)"
+                self.log("Self-test ok")
             } else {
-                self.launchStatus = "Airlift failed: \(detail)"
+                self.launchStatus = "Self-test failed: \(detail)"
+                self.launchFailed = true
+                self.log("Self-test failed: \(detail)")
             }
-            self.launchFailed = !success
-            // Any browser already on screen may have listed files while the
-            // permissions were still missing — reload it.
+            self.logBooksRestoreCheck()
             FilosManager.shared.refreshFiles.toggle()
         }
 
         if !started {
             launchStatus = "Airlift already running"
+        }
+        return started
+    }
+
+    /// Read-only sanity check after a self-test run: confirms the pairing file
+    /// is still intact. Purely local logging, no device filesystem mutation.
+    private func logBooksRestoreCheck() {
+        let path = PairingController.pairingFilePath()
+        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+        if size > 0 {
+            log("Books restore check: pairing file intact (\(size) bytes)")
+        } else {
+            log("Books restore check: pairing file missing at \(path) — re-pair before browsing")
+            launchFailed = true
         }
     }
 

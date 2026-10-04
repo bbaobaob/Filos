@@ -23,7 +23,7 @@ struct AirLiftView: View {
                         Text("AirLift")
                             .font(.title2.weight(.semibold))
                     }
-                    Text("Filos pairs with this device over RPPairing and runs Airlift automatically on launch. Use this panel to re-pair, pick a different target, or inspect the log.")
+                    Text("Filos pairs with this device over RPPairing and browses the device over HouseArrest/AFC — no Airlift sync on launch. Use this panel to re-pair, pick a different target, run the manual self-test, or inspect the log.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -127,19 +127,23 @@ struct AirLiftView: View {
                     .font(.system(size: 11, design: .monospaced))
             }
 
-            // MARK: Run
+            // MARK: Self-test
             Section {
                 Button {
-                    airlift.runAirlift()
+                    airlift.runExploitOnce()
                 } label: {
                     HStack {
                         if airlift.isRunning {
                             ProgressView()
                         }
-                        Text(airlift.isRunning ? "Running…" : "Run Airlift")
+                        Text(airlift.isRunning ? "Running…" : "Run Airlift (self-test)")
                     }
                 }
                 .disabled(airlift.isRunning)
+            } footer: {
+                Text("Listing/browsing does not use the AT sync — no Books/AirTraffic mutation. The self-test runs the AirTraffic canary write once, on request only.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             // MARK: Result

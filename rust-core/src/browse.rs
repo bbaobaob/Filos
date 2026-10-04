@@ -297,7 +297,34 @@ fn checked_container_path(path: &str) -> Result<String, String> {
     if trimmed.split('/').any(|component| component == "..") {
         return Err(format!("container path must not contain '..', got '{trimmed}'"));
     }
+    if is_protected_container_path(trimmed) {
+        return Err(format!(
+            "'{trimmed}' is reserved by Airlift and cannot be browsed inside an app container"
+        ));
+    }
     Ok(trimmed.to_owned())
+}
+
+/// Container-relative names that must never be touched, even from inside an
+/// app's own Data container.
+///
+/// The house_arrest helpers never run the AirTraffic sync, so `Books/` and
+/// `Airlock/` are not reachable through them in practice. These names are still
+/// refused: a refusal costs nothing, while writing or deleting
+/// `Books.plist` / `Upload.plist` / `OutstandingAssets_4.sqlite` is exactly
+/// what leaves the Books app signed out or stuck on an update screen.
+fn is_protected_container_path(path: &str) -> bool {
+    if path.contains("Books/Sync") {
+        return true;
+    }
+    path.split('/').any(|component| {
+        component == "Books"
+            || component == "Airlock"
+            || component == "Books.plist"
+            || component == "Upload.plist"
+            // The `-wal` / `-shm` / journal siblings carry the same prefix.
+            || component.starts_with("OutstandingAssets_4.sqlite")
+    })
 }
 
 /// `/private/var/…` and `/var/…` name the same place on device; the Swift side
@@ -879,6 +906,31 @@ mod tests {
         assert!(checked_container_path("Documents").is_err());
         assert!(checked_container_path("/../..").is_err());
         assert!(checked_container_path("/Documents/../Library").is_err());
+    }
+
+    #[test]
+    fn container_paths_refuse_the_books_sync_zone() {
+        for reserved in [
+            "/Books",
+            "/Books/Sync",
+            "/Library/Books/Sync/Books.plist",
+            "/Documents/Books.plist",
+            "/Documents/Upload.plist",
+            "/Documents/OutstandingAssets_4.sqlite",
+            "/Library/OutstandingAssets_4.sqlite-wal",
+            "/Library/OutstandingAssets_4.sqlite-shm",
+            "/Documents/Airlock",
+            "/Documents/Airlock/Books.plist",
+        ] {
+            assert!(
+                checked_container_path(reserved).is_err(),
+                "{reserved} should be refused inside an app container"
+            );
+        }
+
+        // Ordinary container paths stay browsable.
+        assert!(checked_container_path("/Documents/Books.plist.bak").is_ok());
+        assert!(checked_container_path("/Library/Preferences").is_ok());
     }
 
     #[test]
