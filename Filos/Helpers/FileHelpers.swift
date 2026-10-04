@@ -203,8 +203,12 @@ func copyFileToClipboard(_ url: URL) -> Bool {
 
 func conformsToPlistViewer(_ url: URL) -> Bool {
     if AirLiftBrowse.isRemotePath(url.path) {
-        guard let data = AirLiftBrowse.shared.readFile(url.path) else { return false }
-        return (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) != nil
+        // Cache-only heuristic — never pull the whole file over the tunnel just
+        // to render a row badge. If the extension lies, the plist viewer will
+        // fail loudly when the user taps; a failed probe must not spawn an
+        // al_house_files / al_file_read per row.
+        let ext = url.pathExtension.lowercased()
+        return ext == "plist" || (UTType(filenameExtension: ext)?.conforms(to: .propertyList) == true)
     }
     do {
         guard let data = try? Data(contentsOf: url) else { return false }
@@ -217,8 +221,15 @@ func conformsToPlistViewer(_ url: URL) -> Bool {
 
 func conformsToTextViewer(_ url: URL) -> Bool {
     if AirLiftBrowse.isRemotePath(url.path) {
-        guard let data = AirLiftBrowse.shared.readFile(url.path) else { return false }
-        return String(data: data, encoding: .utf8) != nil
+        // Cache-only heuristic — never pull the whole file over the tunnel just
+        // to render a row badge.
+        let type = UTType(filenameExtension: url.pathExtension)
+        if type == nil, url.pathExtension.isEmpty {
+            // Extensionless files: fall back to a conservative "is text" check
+            // on the *name* only — no network probe.
+            return false
+        }
+        return type?.conforms(to: .text) == true || type?.conforms(to: .plainText) == true
     }
     do {
         let _ = try String(contentsOf: url, encoding: .utf8)

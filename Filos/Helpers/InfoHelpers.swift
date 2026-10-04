@@ -36,12 +36,15 @@ func getFolderType(url: URL) -> FolderType {
 /// Owning bundle id for an Application/Shared/AppGroup container row: the
 /// MCMMetadataIdentifier from the device-local metadata plist, or nil when the
 /// plist is missing/corrupt. Never force-unwraps.
+///
+/// For remote paths this returns nil without touching the tunnel — HouseArrest
+/// cannot serve `…/.com.apple.mobile_container_manager.metadata.plist`, and
+/// probing it once per container row hangs the listing. The label comes from
+/// the cached InstallationProxy entry instead (see `appRowLabels`).
 func getBIDFromMCM(_ url: URL) -> String? {
     let path = url.path + "/.com.apple.mobile_container_manager.metadata.plist"
     if AirLiftBrowse.isRemotePath(url.path) {
-        guard let data = AirLiftBrowse.shared.readFile(path) else { return nil }
-        guard let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else { return nil }
-        return plist["MCMMetadataIdentifier"] as? String
+        return nil
     }
     guard let plist = NSDictionary(contentsOf: URL(fileURLWithPath: path)) else { return url.lastPathComponent }
     return plist["MCMMetadataIdentifier"] as? String
@@ -52,29 +55,20 @@ func getBIDFromMCM(_ url: URL) -> String? {
 /// Falls back to CFBundleExecutable, then to the MCMMetadataIdentifier bundle
 /// id, then nil. Tolerates missing/corrupt plists.
 func getNameFromInfP(_ url: URL) -> String? {
-    let isRemote = AirLiftBrowse.isRemotePath(url.path)
+    // Remote rows are labelled purely from the cached InstallationProxy data
+    // (`appRowLabels` / `folderLabel`). Reading the container's Info.plist over
+    // the tunnel during row rendering is what made every container row spawn a
+    // HouseArrest tunnel, stalling the listing.
+    guard !AirLiftBrowse.isRemotePath(url.path) else { return nil }
 
     // Collect candidate .app directories.
     var apps: [String] = []
-    if isRemote {
-        apps = ((try? AirLiftBrowse.shared.listDir(url.path).get()) ?? [])
-            .filter { $0.name.hasSuffix(".app") }
-            .map { $0.name }
-    } else {
-        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: url.path) else { return nil }
-        apps = contents.filter { $0.hasSuffix(".app") }
-    }
+    guard let contents = try? FileManager.default.contentsOfDirectory(atPath: url.path) else { return nil }
+    apps = contents.filter { $0.hasSuffix(".app") }
 
     for item in apps {
         let infopath = url.path + "/" + item + "/Info.plist"
-        var plist: NSDictionary?
-        if isRemote {
-            if let data = AirLiftBrowse.shared.readFile(infopath) {
-                plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? NSDictionary
-            }
-        } else {
-            plist = NSDictionary(contentsOf: URL(fileURLWithPath: infopath))
-        }
+        let plist = NSDictionary(contentsOf: URL(fileURLWithPath: infopath))
         guard let plist else { continue }
         if let name = plist["CFBundleDisplayName"] as? String, !name.isEmpty { return name }
         if let name = plist["CFBundleName"] as? String, !name.isEmpty { return name }
@@ -91,17 +85,33 @@ func getNameFromInfP(_ url: URL) -> String? {
 ///   * container / bundle — display name, bundle id underneath.
 ///   * appGroup — owning bundle id first, container UUID underneath.
 func appRowLabels(url: URL) -> (title: String, subtitle: String?) {
-    let bundleID = getBIDFromMCM(url) ?? url.lastPathComponent
     switch getFolderType(url: url) {
     case .appGroup:
+        if AirLiftBrowse.isRemotePath(url.path) {
+            // App Group containers are labelled from the cached InstallationProxy
+            // entry only — no plist probe on render.
+            let wanted = AirLiftBrowse.normalizeDevicePath(url.path)
+            if let app = AirLiftBrowse.shared.cachedApps()?.first(where: {
+                $0.group_containers?.values.contains(where: { AirLiftBrowse.normalizeDevicePath($0) == wanted }) == true
+            }) {
+                return (title: app.bundle_id, subtitle: url.lastPathComponent)
+            }
+            return (title: url.lastPathComponent, subtitle: "bundle id unavailable")
+        }
         // AppGroup leads with the owning bundle id; the UUID is the fallback.
+        let bundleID = getBIDFromMCM(url) ?? url.lastPathComponent
         return (title: bundleID, subtitle: url.lastPathComponent)
     case .container, .bundle:
-        // InstallationProxy already knows both halves of the label for a Data
-        // container (display name + bundle id) — no plist round trip needed.
-        if let app = AirLiftBrowse.shared.app(forContainerPath: url.path) {
-            return (title: app.name.isEmpty ? app.bundle_id : app.name, subtitle: app.bundle_id)
+        if AirLiftBrowse.isRemotePath(url.path) {
+            // InstallationProxy already knows both halves of the label for a Data
+            // container (display name + bundle id) — no tunnel round trip needed.
+            if let app = AirLiftBrowse.shared.app(forContainerPath: url.path) {
+                return (title: app.name.isEmpty ? app.bundle_id : app.name, subtitle: app.bundle_id)
+            }
+            // Unknown to the cache: honest fallback, never a probe per row.
+            return (title: url.lastPathComponent, subtitle: "bundle id unavailable")
         }
+        let bundleID = getBIDFromMCM(url) ?? url.lastPathComponent
         let name = getNameFromInfP(url) ?? bundleID
         return (title: name, subtitle: bundleID)
     case .normal:
@@ -113,9 +123,19 @@ func folderLabel(url: URL) -> String {
     let parent = normalizedFSPath(url.deletingLastPathComponent().path)
 
     if parent == normalizedFSPath(FSPaths.appBundles) {
+        if AirLiftBrowse.isRemotePath(url.path) {
+            return AirLiftBrowse.shared.app(forContainerPath: url.path)?.name.nonEmpty ?? url.lastPathComponent
+        }
         return getNameFromInfP(url) ?? url.lastPathComponent
     } else if parent == normalizedFSPath(FSPaths.appContainers) || parent == normalizedFSPath(FSPaths.appGroups) {
+        if AirLiftBrowse.isRemotePath(url.path) {
+            return AirLiftBrowse.shared.app(forContainerPath: url.path)?.bundle_id ?? url.lastPathComponent
+        }
         return getBIDFromMCM(url) ?? url.lastPathComponent
     }
     return url.lastPathComponent
+}
+
+private extension String {
+    var nonEmpty: String? { isEmpty ? nil : self }
 }
