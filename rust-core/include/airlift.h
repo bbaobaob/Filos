@@ -110,6 +110,50 @@ int32_t al_exploit_inject_folder(const char *pairing_path,
                                  char **out_error);
 
 // ---------------------------------------------------------------------------
+// Remote browsing (AFC over the pairing tunnel)
+// ---------------------------------------------------------------------------
+
+// List a remote directory. BLOCKS — run off the main thread.
+// `path`          — absolute device path, e.g. "/var/mobile/Library/Preferences".
+// `log_cb`        — receives log lines (may be NULL).
+// `out_json`      — on success receives
+//                   [{"name":"com.apple.mobilesafari","is_dir":true,"size":0}, …].
+//                   Free with al_string_free().
+// `out_error`     — set on failure; free with al_string_free().
+// Returns 0 on success, 1 on error, 2 if both out pointers are NULL.
+//
+// Only the exact path given is read. AirTraffic staging files (Books.plist,
+// Books/Sync, Airlock, airlift-*) are refused, as are relative paths and any
+// path containing "..".
+int32_t al_dir_list(const char *pairing_path,
+                    const char *path,
+                    ALLogCallback log_cb,
+                    void *ctx,
+                    char **out_json,
+                    char **out_error);
+
+// Read one remote file. BLOCKS — run off the main thread.
+// `out_b64` receives the base64-encoded contents; free with al_string_free().
+// Files larger than 16 MiB are refused instead of being pulled over AFC.
+int32_t al_file_read(const char *pairing_path,
+                     const char *path,
+                     char **out_b64,
+                     char **out_error);
+
+// Write base64 `b64_content` to the remote `path` (created/truncated).
+// BLOCKS — run off the main thread. Payloads over 16 MiB are refused.
+int32_t al_file_write(const char *pairing_path,
+                      const char *path,
+                      const char *b64_content,
+                      char **out_error);
+
+// Delete the remote `path` (recursively when it is a directory).
+// BLOCKS — run off the main thread.
+int32_t al_file_delete(const char *pairing_path,
+                       const char *path,
+                       char **out_error);
+
+// ---------------------------------------------------------------------------
 // Syslog Stream / Live Card Detection
 // ---------------------------------------------------------------------------
 

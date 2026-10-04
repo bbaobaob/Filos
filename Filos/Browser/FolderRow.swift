@@ -17,22 +17,24 @@ struct FolderRow: View {
     @Binding var previewer: FBPreviewer?
     
     @State private var folderType: FolderType = .normal
-    
+    @State private var appTitle: String = ""
+    @State private var appSubtitle: String? = nil
+
     var body: some View {
         Button {
             mgr.push(item.destURL)
         } label: {
             HStack(spacing: fileRowSpacing) {
                 Group {
-                    if fm.fileExists(atPath: item.fileURL.appendingPathComponent(".com.apple.mobile_container_manager.metadata.plist").path) || fm.fileExists(atPath: item.fileURL.appendingPathComponent("Info.plist").path) {
+                    if folderType != .normal {
                         Image(systemName: "app")
                             .frame(width: 20, alignment: .center)
                         VStack(alignment: .leading) {
-                            Text(getNameFromInfP(item.fileURL) ?? getBIDFromMCM(item.fileURL) ?? item.name)
+                            Text(appTitle.isEmpty ? item.name : appTitle)
                                 .foregroundStyle(item.hidden ? .secondary : .primary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
-                            Text(item.fileURL.lastPathComponent)
+                            Text(appSubtitle ?? item.fileURL.lastPathComponent)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
@@ -64,6 +66,23 @@ struct FolderRow: View {
             }
         }
         .foregroundStyle(Color(.label))
+        .onAppear {
+            // Label resolution may hit the tunnel for remote containers —
+            // keep it off the main thread and tolerate missing plists.
+            DispatchQueue.global(qos: .userInitiated).async {
+                let type = getFolderType(url: item.fileURL)
+                guard type != .normal else {
+                    DispatchQueue.main.async { folderType = .normal }
+                    return
+                }
+                let labels = appRowLabels(url: item.fileURL)
+                DispatchQueue.main.async {
+                    folderType = type
+                    appTitle = labels.title
+                    appSubtitle = labels.subtitle
+                }
+            }
+        }
         .contextMenu {
             if item.readable {
                 Button {
@@ -95,7 +114,7 @@ struct FolderRow: View {
                                 for url in folderURLs {
                                     try fm.moveItem(at: url, to: newFolderURL.appendingPathComponent(url.lastPathComponent))
                                 }
-                                try fm.removeItem(at: item.fileURL)
+                                if AirLiftBrowse.isRemotePath(item.fileURL.path) { removeItemAnywhere(at: item.fileURL) } else { try fm.removeItem(at: item.fileURL) }
                                 mgr.refreshFiles.toggle()
                             } catch {
                                 print("[!] failed to rename folder: \(error)")
@@ -153,7 +172,7 @@ struct FolderRow: View {
                             for url in folderURLs {
                                 try fm.moveItem(at: url, to: newFolderURL.appendingPathComponent(url.lastPathComponent))
                             }
-                            try fm.removeItem(at: item.fileURL)
+                            if AirLiftBrowse.isRemotePath(item.fileURL.path) { removeItemAnywhere(at: item.fileURL) } else { try fm.removeItem(at: item.fileURL) }
                             mgr.refreshFiles.toggle()
                         } catch {
                             print("[!] failed to move folder: \(error)")
@@ -175,7 +194,7 @@ struct FolderRow: View {
             
             if item.writable {
                 Button(role: .destructive) {
-                    try? fm.removeItem(at: item.fileURL)
+                    removeItemAnywhere(at: item.fileURL)
                     mgr.refreshFiles.toggle()
                 } label: {
                     Label("Delete", systemImage: "trash")

@@ -5,10 +5,13 @@
 //!   al_pairing_run_host    — RPPairing host (blocks until paired)
 //!   al_pairing_result_free — free the ALPairResult heap strings
 //!   al_exploit_run         — run the AirTraffic exploit over the loopback tunnel
+//!   al_dir_list            — list a remote directory as JSON over AFC
+//!   al_file_read/write/delete — read / write / delete one remote file over AFC
 //!   al_string_free         — free any char* returned by this library
 
 use std::ffi::{c_char, c_void};
 
+pub mod browse;
 pub mod exploit;
 pub mod ffi_util;
 pub mod grappa;
@@ -215,6 +218,112 @@ pub extern "C" fn al_syslog_stream_stop() {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         exploit::stop_syslog_stream();
     }));
+}
+
+// ---------------------------------------------------------------------------
+// Remote browsing (AFC over the pairing tunnel)
+// ---------------------------------------------------------------------------
+
+/// List a remote directory. `out_json` receives
+/// `[{"name":…,"is_dir":…,"size":…}, …]` on success.
+///
+/// # Safety
+/// All pointer arguments must be null or valid for their documented use.
+#[no_mangle]
+pub unsafe extern "C" fn al_dir_list(
+    pairing_path: *const c_char,
+    path: *const c_char,
+    log_cb: exploit::ALLogCallback,
+    ctx: *mut c_void,
+    out_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        browse::dir_list(pairing_path, path, log_cb, ctx, out_json, out_error)
+    }));
+    match res {
+        Ok(rc) => rc,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = ffi_util::cstr(format!("Rust panic in al_dir_list: {e:?}"));
+            }
+            1
+        }
+    }
+}
+
+/// Read a remote file. `out_b64` receives its base64 contents on success.
+///
+/// # Safety
+/// All pointer arguments must be null or valid for their documented use.
+#[no_mangle]
+pub unsafe extern "C" fn al_file_read(
+    pairing_path: *const c_char,
+    path: *const c_char,
+    out_b64: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        browse::file_read(pairing_path, path, out_b64, out_error)
+    }));
+    match res {
+        Ok(rc) => rc,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = ffi_util::cstr(format!("Rust panic in al_file_read: {e:?}"));
+            }
+            1
+        }
+    }
+}
+
+/// Write base64 `b64_content` to the remote `path` (created/truncated).
+///
+/// # Safety
+/// All pointer arguments must be null or valid for their documented use.
+#[no_mangle]
+pub unsafe extern "C" fn al_file_write(
+    pairing_path: *const c_char,
+    path: *const c_char,
+    b64_content: *const c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        browse::file_write(pairing_path, path, b64_content, out_error)
+    }));
+    match res {
+        Ok(rc) => rc,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = ffi_util::cstr(format!("Rust panic in al_file_write: {e:?}"));
+            }
+            1
+        }
+    }
+}
+
+/// Delete the remote `path` (recursively for a directory).
+///
+/// # Safety
+/// All pointer arguments must be null or valid for their documented use.
+#[no_mangle]
+pub unsafe extern "C" fn al_file_delete(
+    pairing_path: *const c_char,
+    path: *const c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        browse::file_delete(pairing_path, path, out_error)
+    }));
+    match res {
+        Ok(rc) => rc,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = ffi_util::cstr(format!("Rust panic in al_file_delete: {e:?}"));
+            }
+            1
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

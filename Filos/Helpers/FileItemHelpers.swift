@@ -34,7 +34,26 @@ let clearFileItem = FileItem(name: "", fileURL: URL(fileURLWithPath: ""), destUR
 
 func getFileItem(at url: URL) -> FileItem {
     var item = FileItem(name: url.lastPathComponent, fileURL: url, destURL: url, type: .file, uttype: .data, size: 0, creationDate: Date(), modifiedDate: Date(), creationDateStr: "", modifiedDateStr: "", hidden: false, posixPerms: "", owner: "", group: "", readable: false, writable: false, executable: false)
-    
+
+    // Sandboxed FileManager cannot stat Airlift paths — mark them readable and
+    // writable (they go through the tunnel) so viewers and edit actions engage.
+    if AirLiftBrowse.isRemotePath(url.path) {
+        item.readable = true
+        item.writable = true
+        item.hidden = url.lastPathComponent.hasPrefix(".")
+        if let uti = UTType(filenameExtension: url.pathExtension) {
+            item.uttype = uti
+        }
+        // Best-effort dir/file distinction from the cached parent listing.
+        if let parentEntries = AirLiftBrowse.shared.cachedListing(for: url.deletingLastPathComponent().path),
+           let entry = parentEntries.first(where: { $0.name == url.lastPathComponent }) {
+            item.type = entry.isDir ? .folder : .file
+            if entry.isDir { item.uttype = .folder }
+            item.size = entry.size
+        }
+        return item
+    }
+
     let formatter = DateFormatter()
     formatter.dateFormat = "MM-dd-yyyy h:mm a"
     formatter.locale = Locale(identifier: "en_US_POSIX")

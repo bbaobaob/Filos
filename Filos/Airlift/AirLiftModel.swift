@@ -372,7 +372,8 @@ final class AirLiftModel: ObservableObject {
 }
 
 /// Forwarded straight into the Rust log line — valid only for the call's duration.
-private let airLiftLogCallback: ALLogCallback = { _, msg in
+/// Shared with AirLiftBrowse (same module, different file).
+let airLiftLogCallback: ALLogCallback = { _, msg in
     guard let msg = msg else { return }
     let line = String(cString: msg)
     AirLiftLogSink.append(line)

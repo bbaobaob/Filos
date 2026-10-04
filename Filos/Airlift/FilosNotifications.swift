@@ -40,7 +40,7 @@ enum FilosNotifications {
 
     /// Posts the "Pairing required" notification. Called from the pairing PIN
     /// callback, since the user is usually inside Settings at that point.
-    static func postPairingPrompt() {
+    static func postPairingPrompt(pin: String? = nil) {
         let center = UNUserNotificationCenter.current()
 
         center.getNotificationSettings { settings in
@@ -50,7 +50,11 @@ enum FilosNotifications {
 
             let content = UNMutableNotificationContent()
             content.title = pairingTitle
-            content.body = pairingBody
+            if let pin, !pin.isEmpty {
+                content.body = "Pairing PIN: \(pin) — enter it in Settings › Developer Mode"
+            } else {
+                content.body = pairingBody
+            }
             content.sound = .default
 
             let request = UNNotificationRequest(identifier: pairingRequestID, content: content, trigger: nil)

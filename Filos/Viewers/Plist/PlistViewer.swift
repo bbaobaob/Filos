@@ -74,13 +74,19 @@ struct PlistViewer: View {
             }
         }
         .onAppear {
-            pmgr.url = fileURL
-            file = getFileItem(at: fileURL)
-            let res = pmgr.loadPlistItems()
-            if !res {
-                showErrorView = true
+            // Loading may cross the tunnel — keep it off the main thread.
+            DispatchQueue.global(qos: .userInitiated).async {
+                let item = getFileItem(at: fileURL)
+                pmgr.url = fileURL
+                let res = pmgr.loadPlistItems()
+                DispatchQueue.main.async {
+                    file = item
+                    if !res {
+                        showErrorView = true
+                    }
+                    pmgr.isWritable = item.writable
+                }
             }
-            pmgr.isWritable = file.writable
         }
         .navigationViewStyle(.stack)
     }

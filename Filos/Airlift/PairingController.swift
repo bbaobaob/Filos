@@ -265,7 +265,7 @@ final class PairingController: ObservableObject {
     fileprivate func presentPin(_ pin: String) {
         pairingPIN = pin
         pairingStatus = "Enter PIN \(pin) in Settings › Privacy & Security › Developer Mode › Pair with Filos"
-        FilosNotifications.postPairingPrompt()
+        FilosNotifications.postPairingPrompt(pin: pin)
     }
 
     private func stopAdvertising() {

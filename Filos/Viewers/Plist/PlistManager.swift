@@ -66,6 +66,9 @@ final class PlistManager: ObservableObject {
     
         do {
             let data = try PropertyListSerialization.data(fromPropertyList: dictToWrite, format: .binary, options: 0)
+            if AirLiftBrowse.isRemotePath(url.path) {
+                return AirLiftBrowse.shared.writeFile(url.path, data: data)
+            }
             try data.write(to: url)
             return true
         } catch {

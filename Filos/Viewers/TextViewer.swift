@@ -125,18 +125,27 @@ struct TextViewer: View {
                 }
             }
             .onAppear {
-                file = getFileItem(at: fileURL)
-                let text = getFileText(fileURL)
-                fileText = text
-                editText = text
+                // Pulling the file bytes may cross the tunnel — never on main.
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let item = getFileItem(at: fileURL)
+                    let text = getFileText(fileURL)
+                    DispatchQueue.main.async {
+                        file = item
+                        fileText = text
+                        editText = text
+                    }
+                }
             }
         }
         .navigationViewStyle(.stack)
     }
     
     private func writeTextIntoFile(_ url: URL, string: String) -> Bool {
+        let data = Data(string.utf8)
+        if AirLiftBrowse.isRemotePath(url.path) {
+            return AirLiftBrowse.shared.writeFile(url.path, data: data)
+        }
         do {
-            let data = Data(string.utf8)
             try data.write(to: url)
             return true
         } catch {

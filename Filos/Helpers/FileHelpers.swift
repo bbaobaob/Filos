@@ -13,6 +13,7 @@ import UniformTypeIdentifiers
 enum FSPaths {
     static var appBundles = "/private/var/containers/Bundle/Application"
     static var appContainers = "/private/var/mobile/Containers/Data/Application"
+    static var appGroups = "/private/var/mobile/Containers/Shared/AppGroup"
 }
 
 extension FileManager {
@@ -24,22 +25,34 @@ extension FileManager {
 }
 
 func getFileDict(_ url: URL) -> [String : Any]? {
+    if AirLiftBrowse.isRemotePath(url.path) {
+        guard let data = AirLiftBrowse.shared.readFile(url.path) else { return nil }
+        return try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String : Any]
+    }
     if let data = try? Data(contentsOf: url),
        let dict = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String : Any] {
         return dict
     }
-    
+
     return nil
 }
 
 func getFileText(_ url: URL) -> String {
+    if AirLiftBrowse.isRemotePath(url.path) {
+        guard let data = AirLiftBrowse.shared.readFile(url.path) else {
+            print("(fm) remote read failed for \(url.path)")
+            return ""
+        }
+        if let text = String(data: data, encoding: .utf8) { return text }
+        return String(decoding: data, as: UTF8.self)
+    }
     do {
         let data = try Data(contentsOf: url)
-        
+
         if let text = String(data: data, encoding: .utf8) {
             return text
         }
-        
+
         return String(decoding: data, as: UTF8.self)
     } catch {
         print("(fm) failed to get text! path: \(error)")
@@ -65,7 +78,34 @@ func makeTemp(_ fileURL: URL) -> URL? {
     } catch {
         print("[!] failed to make temp: \(error)")
     }
+
+    // Remote fallback: fetch over the tunnel and stage in a temp file.
+    if AirLiftBrowse.isRemotePath(fileURL.path), let data = AirLiftBrowse.shared.readFile(fileURL.path) {
+        let tempURL = URL.temporaryDirectory.appendingPathComponent(fileURL.lastPathComponent)
+        try? fm.removeItem(at: tempURL)
+        do {
+            try data.write(to: tempURL)
+            return tempURL
+        } catch {
+            print("[!] failed to stage remote file: \(error)")
+        }
+    }
     return nil
+}
+
+/// Delete regardless of whether the path is local or remote.
+@discardableResult
+func removeItemAnywhere(at url: URL) -> Bool {
+    if AirLiftBrowse.isRemotePath(url.path) {
+        return AirLiftBrowse.shared.delete(url.path)
+    }
+    do {
+        try fm.removeItem(at: url)
+        return true
+    } catch {
+        print("[!] failed to delete \(url.path): \(error)")
+        return false
+    }
 }
 
 func generateNavPath(path: String) -> String {
@@ -162,6 +202,10 @@ func copyFileToClipboard(_ url: URL) -> Bool {
 }
 
 func conformsToPlistViewer(_ url: URL) -> Bool {
+    if AirLiftBrowse.isRemotePath(url.path) {
+        guard let data = AirLiftBrowse.shared.readFile(url.path) else { return false }
+        return (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) != nil
+    }
     do {
         guard let data = try? Data(contentsOf: url) else { return false }
         let _ = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String : Any]
@@ -172,6 +216,10 @@ func conformsToPlistViewer(_ url: URL) -> Bool {
 }
 
 func conformsToTextViewer(_ url: URL) -> Bool {
+    if AirLiftBrowse.isRemotePath(url.path) {
+        guard let data = AirLiftBrowse.shared.readFile(url.path) else { return false }
+        return String(data: data, encoding: .utf8) != nil
+    }
     do {
         let _ = try String(contentsOf: url, encoding: .utf8)
         return true

@@ -103,7 +103,7 @@ struct FileRow: View {
             if item.writable {
                 Button(role: .destructive) {
                     do {
-                        try fm.removeItem(at: item.fileURL)
+                        if AirLiftBrowse.isRemotePath(item.fileURL.path) { removeItemAnywhere(at: item.fileURL) } else { try fm.removeItem(at: item.fileURL) }
                         mgr.refreshFiles.toggle()
                     } catch {
                         print("[!] failed to delete file: \(error)")
@@ -250,7 +250,7 @@ struct FileRow: View {
                                 let targetURL = URL(fileURLWithPath: path).appendingPathComponent(item.fileURL.lastPathComponent)
                                 try fm.copyItem(at: item.fileURL, to: targetURL)
                                 Alertinator.shared.alert(title: "Successfully moved file!", body: "Would you like to delete the original file?", actionLabel: "Yes", action: {
-                                    try? fm.removeItem(at: item.fileURL)
+                                    if AirLiftBrowse.isRemotePath(item.fileURL.path) { removeItemAnywhere(at: item.fileURL) } else { try? fm.removeItem(at: item.fileURL) }
                                     mgr.refreshFiles.toggle()
                                 })
                             } catch {
@@ -275,7 +275,7 @@ struct FileRow: View {
             if item.writable {
                 Button(role: .destructive) {
                     do {
-                        try fm.removeItem(at: item.fileURL)
+                        if AirLiftBrowse.isRemotePath(item.fileURL.path) { removeItemAnywhere(at: item.fileURL) } else { try fm.removeItem(at: item.fileURL) }
                         mgr.refreshFiles.toggle()
                     } catch {
                         print("[!] failed to delete file: \(error)")

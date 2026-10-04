@@ -1,0 +1,535 @@
+//! Remote file browsing over the Airlift tunnel.
+//!
+//! The exploit path (`exploit.rs`) can only stage and verify a canary write, so
+//! the file browser had nothing to enumerate. These helpers reuse the very same
+//! `connect_tunnel` + `AfcClient` machinery to list a directory, read a file,
+//! write a file and delete a file on the paired device.
+//!
+//! Safety model — every call is deliberately narrow:
+//!   * Only the exact path handed in by the caller is touched. Nothing else on
+//!     the device is enumerated, written or deleted.
+//!   * `..` components, relative paths and empty paths are rejected.
+//!   * Files that the AirTraffic escape itself owns are refused outright — the
+//!     staging set (`Books.plist`, `Books/Sync`, `Airlock/…`) and any
+//!     `airlift-*-` artefact. Clobbering those breaks the escape (or bricks the
+//!     Books app), so browsing refuses them for reads *and* writes.
+//!   * Reads/writes are size-capped so a huge file cannot exhaust memory while
+//!     being base64'd into a JSON string.
+//!
+//! Tunnel opens are serialised behind `TUNNEL_LOCK`: each call opens its own
+//! loopback tunnel, and letting several of them race makes the remote side drop
+//! connections unpredictably.
+
+use std::ffi::{c_char, c_void};
+use std::sync::{Mutex, MutexGuard};
+
+use idevice::afc::opcode::AfcFopenMode;
+use idevice::afc::AfcClient;
+
+use crate::exploit::{connect_tunnel, Logger, ALLogCallback};
+use crate::ffi_util::{cstr, opt_str, run_with_large_stack};
+
+/// Largest file `al_file_read` will pull over the wire (16 MiB).
+const MAX_READ_BYTES: usize = 16 * 1024 * 1024;
+/// Largest payload `al_file_write` will accept (16 MiB of raw bytes).
+const MAX_WRITE_BYTES: usize = 16 * 1024 * 1024;
+
+/// One remote tunnel open at a time.
+static TUNNEL_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_tunnel(name: &str) -> MutexGuard<'static, ()> {
+    match TUNNEL_LOCK.lock() {
+        Ok(guard) => guard,
+        // A previous holder panicked; the tunnel it opened is long gone, so the
+        // data is no longer meaningful — but blocking every later call forever
+        // is worse than carrying on.
+        Err(poisoned) => {
+            tracing::warn!("{name}: tunnel lock was poisoned by an earlier panic, continuing");
+            poisoned.into_inner()
+        }
+    }
+}
+
+/// Refuse anything that could disturb the AirTraffic escape.
+fn is_protected(path: &str) -> bool {
+    if path.contains("Books/Sync") {
+        return true;
+    }
+    path.split('/').any(|component| {
+        component == "Books.plist"
+            || component == "Airlock"
+            || component.starts_with("airlift-src-")
+            || component.starts_with("airlift-link-")
+            || component.starts_with("airlift-recovered-")
+            || component.starts_with("airlift-canary-")
+    })
+}
+
+/// Validate a caller-supplied path and return its canonical spelling.
+///
+/// Rejects empty/relative paths, `..` traversal and the protected staging set.
+fn checked_path(path: &str) -> Result<String, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("path must not be empty".to_owned());
+    }
+    if !trimmed.starts_with('/') {
+        return Err(format!("path must be absolute, got '{trimmed}'"));
+    }
+    if trimmed.split('/').any(|component| component == "..") {
+        return Err(format!("path must not contain '..', got '{trimmed}'"));
+    }
+    if is_protected(trimmed) {
+        return Err(format!("'{trimmed}' is reserved by Airlift and cannot be browsed"));
+    }
+    Ok(trimmed.to_owned())
+}
+
+/// Spellings to try on the device for one logical path.
+///
+/// AFC roots differ between services, so the absolute path is tried first and
+/// the obvious relatives are used as fallbacks. Duplicates are dropped and the
+/// original order is preserved.
+fn path_candidates(path: &str) -> Vec<String> {
+    let mut candidates: Vec<String> = Vec::new();
+    let mut push = |value: String| {
+        if !candidates.contains(&value) {
+            candidates.push(value);
+        }
+    };
+
+    push(path.to_owned());
+    // Directories often need an explicit trailing slash.
+    if !path.ends_with('/') {
+        push(format!("{path}/"));
+    }
+    if let Some(rest) = path.strip_prefix("/private/var/") {
+        push(format!("/var/{rest}"));
+    }
+    if let Some(rest) = path.strip_prefix("/var/mobile/") {
+        push(rest.to_owned());
+        push(format!("/{rest}"));
+    }
+    candidates
+}
+
+fn join(base: &str, name: &str) -> String {
+    if base.ends_with('/') {
+        format!("{base}{name}")
+    } else {
+        format!("{base}/{name}")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// base64 (kept local so rust-core needs no extra dependency)
+// ---------------------------------------------------------------------------
+
+const B64_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+pub(crate) fn base64_encode(input: &[u8]) -> String {
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+
+        out.push(B64_ALPHABET[((triple >> 18) & 0x3f) as usize] as char);
+        out.push(B64_ALPHABET[((triple >> 12) & 0x3f) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(B64_ALPHABET[((triple >> 6) & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(B64_ALPHABET[(triple & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+pub(crate) fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    fn value(byte: u8) -> Option<u32> {
+        match byte {
+            b'A'..=b'Z' => Some((byte - b'A') as u32),
+            b'a'..=b'z' => Some((byte - b'a') as u32 + 26),
+            b'0'..=b'9' => Some((byte - b'0') as u32 + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+
+    let mut out: Vec<u8> = Vec::with_capacity(input.len() / 4 * 3);
+    let mut buffer: u32 = 0;
+    let mut bits: u32 = 0;
+    let mut padding = 0usize;
+
+    for byte in input.bytes() {
+        match byte {
+            b'=' => {
+                padding += 1;
+                continue;
+            }
+            b'\n' | b'\r' | b' ' | b'\t' => continue,
+            _ => {}
+        }
+        if padding > 0 {
+            return Err("base64 payload has data after padding".to_owned());
+        }
+        let Some(v) = value(byte) else {
+            return Err(format!("invalid base64 character '{}'", byte as char));
+        };
+        buffer = (buffer << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buffer >> bits) & 0xff) as u8);
+        }
+    }
+
+    if out.len() > MAX_WRITE_BYTES {
+        return Err(format!("payload is {} bytes, over the {MAX_WRITE_BYTES} byte limit", out.len()));
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Async workers
+// ---------------------------------------------------------------------------
+
+async fn open_afc(pairing_path: &str, logger: &Logger) -> Result<AfcClient, String> {
+    let pairing_bytes = std::fs::read(pairing_path)
+        .map_err(|e| format!("Failed to read pairing file at {pairing_path}: {e}"))?;
+    let mut tunnel = connect_tunnel(&pairing_bytes, logger).await?;
+    tunnel.connect_afc(logger).await
+}
+
+async fn list_dir_json(afc: &mut AfcClient, path: &str) -> Result<String, String> {
+    let names = afc
+        .list_dir(path.to_owned())
+        .await
+        .map_err(|e| format!("ReadDir failed: {e:?}"))?;
+
+    let mut entries: Vec<serde_json::Value> = Vec::with_capacity(names.len());
+    for name in names {
+        if name.is_empty() || name == "." || name == ".." {
+            continue;
+        }
+        let child = join(path, &name);
+        let (is_dir, size) = match afc.get_file_info(child.clone()).await {
+            Ok(info) => (info.st_ifmt.contains("DIR"), info.size),
+            // Some AFC services refuse GetFileInfo on entries they still list.
+            // Fall back to a name heuristic so the row still shows up.
+            Err(e) => {
+                tracing::debug!("browse: GetFileInfo({child}) failed: {e:?}");
+                (name.ends_with(".app"), 0usize)
+            }
+        };
+        entries.push(serde_json::json!({
+            "name": name,
+            "is_dir": is_dir,
+            "size": size,
+        }));
+    }
+
+    Ok(serde_json::Value::Array(entries).to_string())
+}
+
+async fn read_file_bytes(afc: &mut AfcClient, path: &str) -> Result<Vec<u8>, String> {
+    if let Ok(info) = afc.get_file_info(path.to_owned()).await {
+        if info.size > MAX_READ_BYTES {
+            return Err(format!(
+                "{path} is {} bytes, over the {MAX_READ_BYTES} byte read limit",
+                info.size
+            ));
+        }
+    }
+    let mut fd = afc
+        .open(path.to_owned(), AfcFopenMode::RdOnly)
+        .await
+        .map_err(|e| format!("FileOpen failed: {e:?}"))?;
+    let result = fd.read_entire().await;
+    let _ = fd.close().await;
+    let data = result.map_err(|e| format!("Read failed: {e:?}"))?;
+    if data.len() > MAX_READ_BYTES {
+        return Err(format!(
+            "{path} read {} bytes, over the {MAX_READ_BYTES} byte limit",
+            data.len()
+        ));
+    }
+    Ok(data)
+}
+
+async fn write_file_bytes(afc: &mut AfcClient, path: &str, data: &[u8]) -> Result<(), String> {
+    let mut fd = afc
+        .open(path.to_owned(), AfcFopenMode::WrOnly)
+        .await
+        .map_err(|e| format!("FileOpen for write failed: {e:?}"))?;
+    let write = fd.write_entire(data).await;
+    let close = fd.close().await;
+    write.map_err(|e| format!("Write failed: {e:?}"))?;
+    close.map_err(|e| format!("Close failed: {e:?}"))?;
+    Ok(())
+}
+
+async fn delete_path(afc: &mut AfcClient, path: &str) -> Result<(), String> {
+    match afc.remove(path.to_owned()).await {
+        Ok(()) => Ok(()),
+        Err(first) => {
+            // Directories need the recursive variant.
+            afc.remove_all(path.to_owned())
+                .await
+                .map_err(|second| format!("Remove failed ({first:?}) and RemoveAll failed ({second:?})"))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FFI entry points
+// ---------------------------------------------------------------------------
+
+/// # Safety
+/// All pointer args must be null or valid for their documented use.
+pub unsafe fn dir_list(
+    pairing_path: *const c_char,
+    path: *const c_char,
+    log_cb: ALLogCallback,
+    ctx: *mut c_void,
+    out_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    if out_json.is_null() && out_error.is_null() {
+        return 2;
+    }
+
+    let pairing_path = opt_str(pairing_path, "airlift_pairing.plist");
+    let requested = opt_str(path, "");
+    let ctx_usize = ctx as usize;
+
+    let res = run_with_large_stack("al_dir_list", move || {
+        let logger = Logger::new(log_cb, ctx_usize as *mut c_void);
+        let path = checked_path(&requested)?;
+        let _guard = lock_tunnel("al_dir_list");
+        idevice_ffi::run_sync_local(async move {
+            let mut afc = open_afc(&pairing_path, &logger).await?;
+            let mut last_error = String::new();
+            for candidate in path_candidates(&path) {
+                logger.log(format!("airlift: listing '{candidate}'"));
+                match list_dir_json(&mut afc, &candidate).await {
+                    Ok(json) => return Ok(json),
+                    Err(e) => {
+                        logger.log(format!("airlift: listing '{candidate}' failed: {e}"));
+                        last_error = e;
+                    }
+                }
+            }
+            Err(format!("Failed to list '{path}': {last_error}"))
+        })
+    });
+
+    finish_string_result(res, "al_dir_list", out_json, out_error)
+}
+
+/// # Safety
+/// All pointer args must be null or valid for their documented use.
+pub unsafe fn file_read(
+    pairing_path: *const c_char,
+    path: *const c_char,
+    out_b64: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    if out_b64.is_null() && out_error.is_null() {
+        return 2;
+    }
+
+    let pairing_path = opt_str(pairing_path, "airlift_pairing.plist");
+    let requested = opt_str(path, "");
+
+    let res = run_with_large_stack("al_file_read", move || {
+        let logger = Logger::new(None, std::ptr::null_mut());
+        let path = checked_path(&requested)?;
+        let _guard = lock_tunnel("al_file_read");
+        idevice_ffi::run_sync_local(async move {
+            let mut afc = open_afc(&pairing_path, &logger).await?;
+            let mut last_error = String::new();
+            for candidate in path_candidates(&path) {
+                match read_file_bytes(&mut afc, &candidate).await {
+                    Ok(data) => return Ok(base64_encode(&data)),
+                    Err(e) => {
+                        logger.log(format!("airlift: reading '{candidate}' failed: {e}"));
+                        last_error = e;
+                    }
+                }
+            }
+            Err(format!("Failed to read '{path}': {last_error}"))
+        })
+    });
+
+    finish_string_result(res, "al_file_read", out_b64, out_error)
+}
+
+/// # Safety
+/// All pointer args must be null or valid for their documented use.
+pub unsafe fn file_write(
+    pairing_path: *const c_char,
+    path: *const c_char,
+    b64_content: *const c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let pairing_path = opt_str(pairing_path, "airlift_pairing.plist");
+    let requested = opt_str(path, "");
+    let encoded = opt_str(b64_content, "");
+
+    let res = run_with_large_stack("al_file_write", move || {
+        let logger = Logger::new(None, std::ptr::null_mut());
+        let path = checked_path(&requested)?;
+        // An empty payload is valid (creates/truncates an empty file).
+        let data = base64_decode(&encoded)?;
+        let _guard = lock_tunnel("al_file_write");
+        idevice_ffi::run_sync_local(async move {
+            let mut afc = open_afc(&pairing_path, &logger).await?;
+            let mut last_error = String::new();
+            for candidate in path_candidates(&path) {
+                match write_file_bytes(&mut afc, &candidate, &data).await {
+                    Ok(()) => {
+                        logger.log(format!("airlift: wrote {} bytes to '{candidate}'", data.len()));
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        logger.log(format!("airlift: writing '{candidate}' failed: {e}"));
+                        last_error = e;
+                    }
+                }
+            }
+            Err(format!("Failed to write '{path}': {last_error}"))
+        })
+    });
+
+    finish_void_result(res, "al_file_write", out_error)
+}
+
+/// # Safety
+/// All pointer args must be null or valid for their documented use.
+pub unsafe fn file_delete(
+    pairing_path: *const c_char,
+    path: *const c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let pairing_path = opt_str(pairing_path, "airlift_pairing.plist");
+    let requested = opt_str(path, "");
+
+    let res = run_with_large_stack("al_file_delete", move || {
+        let logger = Logger::new(None, std::ptr::null_mut());
+        let path = checked_path(&requested)?;
+        let _guard = lock_tunnel("al_file_delete");
+        idevice_ffi::run_sync_local(async move {
+            let mut afc = open_afc(&pairing_path, &logger).await?;
+            let mut last_error = String::new();
+            for candidate in path_candidates(&path) {
+                match delete_path(&mut afc, &candidate).await {
+                    Ok(()) => {
+                        logger.log(format!("airlift: deleted '{candidate}'"));
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        logger.log(format!("airlift: deleting '{candidate}' failed: {e}"));
+                        last_error = e;
+                    }
+                }
+            }
+            Err(format!("Failed to delete '{path}': {last_error}"))
+        })
+    });
+
+    finish_void_result(res, "al_file_delete", out_error)
+}
+
+// ---------------------------------------------------------------------------
+// Result plumbing (mirrors exploit.rs: 0 on success, 1 on error)
+// ---------------------------------------------------------------------------
+
+fn finish_string_result(
+    res: Result<Result<String, String>, String>,
+    name: &str,
+    out_value: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    match res {
+        Ok(Ok(value)) => {
+            if !out_value.is_null() {
+                unsafe { *out_value = cstr(value) };
+            }
+            0
+        }
+        Ok(Err(e)) => {
+            set_error(out_error, e);
+            1
+        }
+        Err(panic_msg) => {
+            set_error(out_error, format!("Worker thread '{name}' failed: {panic_msg}"));
+            1
+        }
+    }
+}
+
+fn finish_void_result(res: Result<Result<(), String>, String>, name: &str, out_error: *mut *mut c_char) -> i32 {
+    match res {
+        Ok(Ok(())) => 0,
+        Ok(Err(e)) => {
+            set_error(out_error, e);
+            1
+        }
+        Err(panic_msg) => {
+            set_error(out_error, format!("Worker thread '{name}' failed: {panic_msg}"));
+            1
+        }
+    }
+}
+
+fn set_error(out_error: *mut *mut c_char, message: String) {
+    if !out_error.is_null() {
+        unsafe { *out_error = cstr(message) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{base64_decode, base64_encode, checked_path, path_candidates};
+
+    #[test]
+    fn base64_round_trips() {
+        for sample in [b"".as_slice(), b"f", b"fo", b"foo", b"foob", b"fooba", b"foobar"] {
+            let encoded = base64_encode(sample);
+            let decoded = base64_decode(&encoded).expect("decodes");
+            assert_eq!(decoded, sample, "round trip failed for {sample:?}");
+        }
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn protected_paths_are_refused() {
+        assert!(checked_path("/var/mobile/Media/Books/Sync/Books.plist").is_err());
+        assert!(checked_path("/var/mobile/Media/Books/Sync").is_err());
+        assert!(checked_path("/var/mobile/Media/Airlock/Book").is_err());
+        assert!(checked_path("/var/mobile/airlift-src-123").is_err());
+        assert!(checked_path("/var/mobile/../etc/passwd").is_err());
+        assert!(checked_path("var/mobile").is_err());
+        assert!(checked_path("").is_err());
+        assert!(checked_path("/var/mobile/Library/Preferences").is_ok());
+    }
+
+    #[test]
+    fn candidates_cover_absolute_and_relative_spellings() {
+        let candidates = path_candidates("/var/mobile/Library/Preferences");
+        assert!(candidates.contains(&"/var/mobile/Library/Preferences".to_owned()));
+        assert!(candidates.contains(&"/var/mobile/Library/Preferences/".to_owned()));
+        assert!(candidates.contains(&"Library/Preferences".to_owned()));
+
+        let candidates = path_candidates("/private/var/tmp");
+        assert!(candidates.contains(&"/var/tmp".to_owned()));
+    }
+}

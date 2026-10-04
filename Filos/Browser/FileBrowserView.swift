@@ -8,6 +8,7 @@
 import SwiftUI
 
 import QuickLook
+import UniformTypeIdentifiers
 
 enum FileSortMode: String, CaseIterable, Codable, Hashable {
     case system, name, date, type, size
@@ -331,10 +332,50 @@ struct FileBrowserView: View {
     
     // MARK: handle files
     private func loadDirFiles() {
+        let path = item.fileURL.path
+
+        // Airlift target paths (/var/mobile, /var/tmp, the 12 defaults) are not
+        // visible to the sandboxed FileManager — enumerate them over the tunnel.
+        if AirLiftBrowse.isRemotePath(path) {
+            currentState = .loading
+            if let entries = AirLiftBrowse.shared.listDir(path) {
+                let unsorted = entries.map { entry -> FileItem in
+                    let url = item.fileURL.appendingPathComponent(entry.name)
+                    return remoteFileItem(name: entry.name, isDirectory: entry.isDir, size: entry.size, url: url)
+                }
+                let sorted = sortFiles(files: unsorted)
+                dirFiles = sorted
+                unfilteredFiles = sorted
+                currentState = sorted.isEmpty ? .noFiles : .loaded
+                return
+            }
+
+            // Fresh tunnel failed — serve the cached listing, otherwise drop
+            // through to FileManager so the existing error UI can explain.
+            if let cached = AirLiftBrowse.shared.cachedListing(for: path) {
+                let unsorted = cached.map { entry -> FileItem in
+                    let url = item.fileURL.appendingPathComponent(entry.name)
+                    return remoteFileItem(name: entry.name, isDirectory: entry.isDir, size: entry.size, url: url)
+                }
+                let sorted = sortFiles(files: unsorted)
+                dirFiles = sorted
+                unfilteredFiles = sorted
+                currentState = sorted.isEmpty ? .noFiles : .loaded
+                return
+            }
+            print("[!] remote listing failed for \(path); falling back to FileManager")
+        }
+
+        loadLocalDirFiles()
+    }
+
+    /// Original sandboxed-FileManager enumeration, used for every non-Airlift
+    /// path and as the fallback when the remote listing fails.
+    private func loadLocalDirFiles() {
         do {
             currentState = .loading
             let pathFiles = try fm.contentsOfDirectory(at: item.fileURL, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey])
-            
+
             let unsortedFiles = pathFiles.map { fileURL in
                 return getFileItem(at: fileURL)
             }
@@ -355,6 +396,17 @@ struct FileBrowserView: View {
                 currentState = .unknownError
             }
         }
+    }
+
+    /// Build a FileItem for a remote entry — no URLResourceValues (the
+    /// sandboxed FileManager cannot stat these), so fill what we know and
+    /// mark readable/writable so viewers and the edit paths engage.
+    private func remoteFileItem(name: String, isDirectory: Bool, size: Int, url: URL) -> FileItem {
+        var item = FileItem(name: name, fileURL: url, destURL: url, type: isDirectory ? .folder : .file, uttype: isDirectory ? .folder : .data, size: size, creationDate: Date(), modifiedDate: Date(), creationDateStr: "", modifiedDateStr: "", hidden: name.hasPrefix("."), posixPerms: "", owner: "", group: "", readable: true, writable: true, executable: false)
+        if !isDirectory, let uti = UTType(filenameExtension: url.pathExtension) {
+            item.uttype = uti
+        }
+        return item
     }
     
     private func sortFiles(files: [FileItem]) -> [FileItem] {
