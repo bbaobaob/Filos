@@ -307,7 +307,7 @@ final class AirLiftBrowse {
 
     func writeFile(_ path: String, data: Data) -> Bool {
         if let (bundleId, relativePath) = containerInfo(forDevicePath: path) {
-            return (try? houseWrite(bundleId: bundleId, path: relativePath, data: data).get()) ?? false
+            return (try? houseWrite(bundleId: bundleId, path: relativePath, data: data).get()) != nil
         }
 
         let pairingPath = PairingController.pairingFilePath()
@@ -340,7 +340,7 @@ final class AirLiftBrowse {
 
     func delete(_ path: String) -> Bool {
         if let (bundleId, relativePath) = containerInfo(forDevicePath: path) {
-            return (try? houseDelete(bundleId: bundleId, path: relativePath).get()) ?? false
+            return (try? houseDelete(bundleId: bundleId, path: relativePath).get()) != nil
         }
 
         let pairingPath = PairingController.pairingFilePath()
