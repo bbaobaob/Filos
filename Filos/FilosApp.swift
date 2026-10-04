@@ -9,7 +9,6 @@ import SwiftUI
 import AirliftFFI
 
 import UniformTypeIdentifiers
-import UserNotifications
 
 var weOnADebugBuild: Bool = false
 var pipe = Pipe()
