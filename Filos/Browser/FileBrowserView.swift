@@ -338,35 +338,41 @@ struct FileBrowserView: View {
         // visible to the sandboxed FileManager — enumerate them over the tunnel.
         if AirLiftBrowse.isRemotePath(path) {
             currentState = .loading
-            if let entries = AirLiftBrowse.shared.listDir(path) {
-                let unsorted = entries.map { entry -> FileItem in
-                    let url = item.fileURL.appendingPathComponent(entry.name)
-                    return remoteFileItem(name: entry.name, isDirectory: entry.isDir, size: entry.size, url: url)
+            switch AirLiftBrowse.shared.listDir(path) {
+            case .success(let entries):
+                applyRemoteListing(entries)
+                return
+            case .failure(let error):
+                // Fresh tunnel failed — serve the cached listing if there is one.
+                if let cached = AirLiftBrowse.shared.cachedListing(for: path) {
+                    print("[!] remote listing failed for \(path) (\(error)); serving cached entries")
+                    applyRemoteListing(cached)
+                    return
                 }
-                let sorted = sortFiles(files: unsorted)
-                dirFiles = sorted
-                unfilteredFiles = sorted
-                currentState = sorted.isEmpty ? .noFiles : .loaded
+                // No cache, and FileManager cannot see this path anyway: its
+                // error would be a sandbox code 257 dressed up as "no
+                // permission", which is never the truth here. Show the real
+                // FFI failure instead.
+                print("[!] remote listing failed for \(path): \(error)")
+                localizedError = "Could not list this directory over the Airlift tunnel:\n\(error)"
+                currentState = .unknownError
                 return
             }
-
-            // Fresh tunnel failed — serve the cached listing, otherwise drop
-            // through to FileManager so the existing error UI can explain.
-            if let cached = AirLiftBrowse.shared.cachedListing(for: path) {
-                let unsorted = cached.map { entry -> FileItem in
-                    let url = item.fileURL.appendingPathComponent(entry.name)
-                    return remoteFileItem(name: entry.name, isDirectory: entry.isDir, size: entry.size, url: url)
-                }
-                let sorted = sortFiles(files: unsorted)
-                dirFiles = sorted
-                unfilteredFiles = sorted
-                currentState = sorted.isEmpty ? .noFiles : .loaded
-                return
-            }
-            print("[!] remote listing failed for \(path); falling back to FileManager")
         }
 
         loadLocalDirFiles()
+    }
+
+    /// Turn remote AFC entries into rows for the current directory.
+    private func applyRemoteListing(_ entries: [RemoteEntry]) {
+        let unsorted = entries.map { entry -> FileItem in
+            let url = item.fileURL.appendingPathComponent(entry.name)
+            return remoteFileItem(name: entry.name, isDirectory: entry.isDir, size: entry.size, url: url)
+        }
+        let sorted = sortFiles(files: unsorted)
+        dirFiles = sorted
+        unfilteredFiles = sorted
+        currentState = sorted.isEmpty ? .noFiles : .loaded
     }
 
     /// Original sandboxed-FileManager enumeration, used for every non-Airlift

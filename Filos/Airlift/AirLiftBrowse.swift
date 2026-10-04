@@ -49,12 +49,16 @@ final class AirLiftBrowse {
 
     // MARK: - Listing
 
-    /// List a remote directory. Returns nil when the tunnel fails; callers
-    /// should fall back to FileManager and surface the existing error UI.
-    @discardableResult
-    func listDir(_ path: String) -> [RemoteEntry]? {
+    /// List a remote directory.
+    ///
+    /// - Throws: the FFI error string when the tunnel or the AFC listing
+    ///   failed. Callers must surface it rather than fall back to
+    ///   `FileManager` — the sandboxed `FileManager` cannot see these paths at
+    ///   all, so its failure (code 257) is meaningless and its "no permission"
+    ///   copy actively misleads.
+    func listDir(_ path: String) -> Result<[RemoteEntry], String> {
         let pairingPath = PairingController.pairingFilePath()
-        let json = queue.sync { () -> String? in
+        let raw = queue.sync { () -> Result<String, String> in
             var outJSON: UnsafeMutablePointer<CChar>?
             var outError: UnsafeMutablePointer<CChar>?
             let rc = pairingPath.withCString { pairC in
@@ -67,20 +71,36 @@ final class AirLiftBrowse {
             if let p = outJSON { al_string_free(p) }
             if let p = outError { al_string_free(p) }
             if rc != 0 {
-                print("[airlift] al_dir_list(\(path)) failed rc=\(rc): \(err ?? "?")")
-                return nil
+                let message = err ?? "al_dir_list returned \(rc) with no error string"
+                print("[airlift] al_dir_list(\(path)) failed rc=\(rc): \(message)")
+                return .failure(message)
             }
-            return json
+            guard let json else {
+                let message = "al_dir_list(\(path)) succeeded but returned no JSON"
+                print("[airlift] \(message)")
+                return .failure(message)
+            }
+            return .success(json)
         }
-        guard let json, let data = json.data(using: .utf8) else { return nil }
+
+        let json: String
+        switch raw {
+        case .success(let value): json = value
+        case .failure(let message): return .failure(message)
+        }
+
+        guard let data = json.data(using: .utf8) else {
+            return .failure("al_dir_list(\(path)) returned text that is not valid UTF-8")
+        }
         guard let entries = try? JSONDecoder().decode([RemoteEntry].self, from: data) else {
-            print("[airlift] al_dir_list(\(path)) returned undecodable JSON")
-            return nil
+            let message = "al_dir_list(\(path)) returned JSON that could not be decoded"
+            print("[airlift] \(message)")
+            return .failure(message)
         }
         cacheLock.lock()
         listingCache[path] = entries
         cacheLock.unlock()
-        return entries
+        return .success(entries)
     }
 
     /// Cached listing for `path`, if a successful fetch happened earlier.

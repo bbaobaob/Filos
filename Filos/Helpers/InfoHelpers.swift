@@ -57,7 +57,7 @@ func getNameFromInfP(_ url: URL) -> String? {
     // Collect candidate .app directories.
     var apps: [String] = []
     if isRemote {
-        apps = (AirLiftBrowse.shared.listDir(url.path) ?? [])
+        apps = ((try? AirLiftBrowse.shared.listDir(url.path).get()) ?? [])
             .filter { $0.name.hasSuffix(".app") }
             .map { $0.name }
     } else {

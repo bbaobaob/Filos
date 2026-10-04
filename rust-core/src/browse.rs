@@ -8,7 +8,9 @@
 //! Safety model — every call is deliberately narrow:
 //!   * Only the exact path handed in by the caller is touched. Nothing else on
 //!     the device is enumerated, written or deleted.
-//!   * `..` components, relative paths and empty paths are rejected.
+//!   * `..` components, relative paths and empty paths are rejected. The `..`
+//!     in [`path_candidates`] output is generated internally from the fixed
+//!     `/var/mobile` mapping, never taken from the caller.
 //!   * Files that the AirTraffic escape itself owns are refused outright — the
 //!     staging set (`Books.plist`, `Books/Sync`, `Airlock/…`) and any
 //!     `airlift-*-` artefact. Clobbering those breaks the escape (or bricks the
@@ -85,11 +87,24 @@ fn checked_path(path: &str) -> Result<String, String> {
     Ok(trimmed.to_owned())
 }
 
+/// Directory AFC is actually rooted at for this tunnel.
+///
+/// `connect_afc` negotiates `com.apple.afc`, whose root is `/var/mobile/Media`
+/// — that is where the exploit stages `Books/`, `Airlock/` and the
+/// `airlift-*` artefacts. Every path handed to [`AfcClient`] is therefore
+/// relative to this directory, never an absolute device path.
+const AFC_ROOT: &str = "/var/mobile/Media";
+
 /// Spellings to try on the device for one logical path.
 ///
 /// AFC roots differ between services, so the absolute path is tried first and
 /// the obvious relatives are used as fallbacks. Duplicates are dropped and the
 /// original order is preserved.
+///
+/// Ordering is deliberate and load-bearing for debugging: absolute spellings
+/// first (what a differently-rooted service understands), then the mapping onto
+/// [`AFC_ROOT`], then plain relatives. Every candidate is logged by the caller,
+/// so the device log shows exactly which spelling AFC accepted.
 fn path_candidates(path: &str) -> Vec<String> {
     let mut candidates: Vec<String> = Vec::new();
     let mut push = |value: String| {
@@ -98,6 +113,8 @@ fn path_candidates(path: &str) -> Vec<String> {
         }
     };
 
+    // 1. Absolute spellings. Tried first so services that do understand a
+    //    full device path keep working, and so a mismatch is visible in the log.
     push(path.to_owned());
     // Directories often need an explicit trailing slash.
     if !path.ends_with('/') {
@@ -106,11 +123,43 @@ fn path_candidates(path: &str) -> Vec<String> {
     if let Some(rest) = path.strip_prefix("/private/var/") {
         push(format!("/var/{rest}"));
     }
-    if let Some(rest) = path.strip_prefix("/var/mobile/") {
+
+    // 2. The same path expressed relative to AFC_ROOT. A bare
+    //    `Afc(ObjectNotFound)` for every absolute spelling is the symptom of
+    //    handing AFC a device path it cannot resolve, so translate:
+    //      /var/mobile/Media/X -> X     (already below the root)
+    //      /var/mobile/X        -> ../X  (exactly one level above the root)
+    // The `..` is a fixed, bounded mapping derived from the prefixes below —
+    // never from caller input, which `checked_path` already rejects.
+    // `/private` is peeled first so the usual `/private/var/mobile/...`
+    // spelling maps the same way.
+    let normalized = path.strip_prefix("/private/").unwrap_or(path);
+    if let Some(mapped) = afc_relative_path(normalized) {
+        push(mapped.clone());
+        if !mapped.ends_with('/') {
+            push(format!("{mapped}/"));
+        }
+    }
+
+    // 3. Plain relative fallbacks, for an AFC whose root is the parent dir.
+    if let Some(rest) = normalized.strip_prefix("/var/mobile/") {
         push(rest.to_owned());
         push(format!("/{rest}"));
     }
     candidates
+}
+
+/// Translate a device path into the spelling AFC (rooted at [`AFC_ROOT`])
+/// expects, or `None` when it does not live under `/var/mobile`.
+fn afc_relative_path(path: &str) -> Option<String> {
+    let normalized = path.trim_end_matches('/');
+    if let Some(rest) = normalized.strip_prefix("/var/mobile/Media/") {
+        return Some(rest.to_owned());
+    }
+    // `AFC_ROOT` is `/var/mobile/Media`, so one `..` reaches `/var/mobile`.
+    normalized
+        .strip_prefix("/var/mobile/")
+        .map(|rest| format!("../{rest}"))
 }
 
 fn join(base: &str, name: &str) -> String {
@@ -316,18 +365,28 @@ pub unsafe fn dir_list(
         let _guard = lock_tunnel("al_dir_list");
         idevice_ffi::run_sync_local(async move {
             let mut afc = open_afc(&pairing_path, &logger).await?;
+            let candidates = path_candidates(&path);
+            logger.log(format!(
+                "airlift: al_dir_list('{path}'), AFC root {AFC_ROOT}, {} candidate(s): {candidates:?}",
+                candidates.len()
+            ));
             let mut last_error = String::new();
-            for candidate in path_candidates(&path) {
+            for candidate in &candidates {
                 logger.log(format!("airlift: listing '{candidate}'"));
-                match list_dir_json(&mut afc, &candidate).await {
-                    Ok(json) => return Ok(json),
+                match list_dir_json(&mut afc, candidate).await {
+                    Ok(json) => {
+                        logger.log(format!("airlift: listing '{candidate}' ok"));
+                        return Ok(json);
+                    }
                     Err(e) => {
                         logger.log(format!("airlift: listing '{candidate}' failed: {e}"));
                         last_error = e;
                     }
                 }
             }
-            Err(format!("Failed to list '{path}': {last_error}"))
+            Err(format!(
+                "Failed to list '{path}' (AFC root {AFC_ROOT}, tried {candidates:?}): {last_error}"
+            ))
         })
     });
 
@@ -498,7 +557,7 @@ fn set_error(out_error: *mut *mut c_char, message: String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{base64_decode, base64_encode, checked_path, path_candidates};
+    use super::{afc_relative_path, base64_decode, base64_encode, checked_path, path_candidates};
 
     #[test]
     fn base64_round_trips() {
@@ -531,5 +590,49 @@ mod tests {
 
         let candidates = path_candidates("/private/var/tmp");
         assert!(candidates.contains(&"/var/tmp".to_owned()));
+    }
+
+    #[test]
+    fn candidates_map_onto_the_afc_root() {
+        // One level below the AFC root (/var/mobile/Media) -> plain relative.
+        let candidates = path_candidates("/var/mobile/Media/DCIM");
+        assert!(candidates.contains(&"DCIM".to_owned()));
+        assert!(candidates.contains(&"DCIM/".to_owned()));
+
+        // One level above the AFC root -> exactly one `..`.
+        let candidates = path_candidates("/var/mobile/Library/SpringBoard");
+        assert!(
+            candidates.contains(&"../Library/SpringBoard".to_owned()),
+            "missing AFC-root mapping in {candidates:?}"
+        );
+        assert!(candidates.contains(&"../Library/SpringBoard/".to_owned()));
+
+        // /private spelling maps identically.
+        let candidates = path_candidates("/private/var/mobile/Library/SpringBoard");
+        assert!(
+            candidates.contains(&"../Library/SpringBoard".to_owned()),
+            "missing /private mapping in {candidates:?}"
+        );
+
+        // Absolute spellings stay first, mapping before plain relatives.
+        let candidates = path_candidates("/var/mobile/Library/SpringBoard");
+        let absolute = candidates
+            .iter()
+            .position(|c| c == "/var/mobile/Library/SpringBoard")
+            .expect("absolute path is a candidate");
+        let mapped = candidates
+            .iter()
+            .position(|c| c == "../Library/SpringBoard")
+            .expect("mapped path is a candidate");
+        let relative = candidates
+            .iter()
+            .position(|c| c == "Library/SpringBoard")
+            .expect("relative path is a candidate");
+        assert!(absolute < mapped, "absolute must be tried before the mapping");
+        assert!(mapped < relative, "mapping must be tried before plain relatives");
+
+        // Nothing outside /var/mobile is mapped — no unbounded traversal.
+        assert!(afc_relative_path("/var/tmp").is_none());
+        assert!(afc_relative_path("/private/etc").is_none());
     }
 }
