@@ -91,7 +91,7 @@ struct SettingsView: View {
                     NavigationLink {
                         AirLiftView()
                     } label: {
-                        ButtonLabel(text: "Airlift", symbol: "airplane")
+                        ButtonLabel("Airlift", symbol: "airplane")
                     }
                 } header: {
                     HeaderLabel("Airlift", symbol: "airplane")

@@ -25,7 +25,7 @@ struct RootLocationsView: View {
                     Button {
                         mgr.push(URL(fileURLWithPath: path))
                     } label: {
-                        NavigationLabel(text: URL(fileURLWithPath: path).lastPathComponent, footer: path, symbol: "folder", showChevron: true)
+                        NavigationLabel(text: URL(fileURLWithPath: path).lastPathComponent, symbol: "folder", footer: path, showChevron: true)
                     }
                 }
             } header: {
@@ -39,7 +39,7 @@ struct RootLocationsView: View {
                     Button {
                         airlift.startPairing()
                     } label: {
-                        ButtonLabel(text: "Pair this device", symbol: "link")
+                        ButtonLabel("Pair this device", symbol: "link")
                     }
                 }
 
