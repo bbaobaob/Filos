@@ -1,0 +1,57 @@
+name: Filos
+options:
+  bundleIdPrefix: com.jbdotparty
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+
+packages:
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation
+    from: "0.9.19"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    # AirliftFFI is arm64-only (aws-lc-rs / idevice); drop x86_64 simulator slice.
+    EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+    GENERATE_INFOPLIST_FILE: "YES"
+    INFOPLIST_FILE: Filos/Info.plist
+
+targets:
+  Filos:
+    type: application
+    platform: iOS
+    sources:
+      - path: Filos
+    dependencies:
+      - package: ZIPFoundation
+        product: ZIPFoundation
+      - framework: AirliftFFI.xcframework
+        embed: false
+    settings:
+      base:
+        PRODUCT_NAME: "Filos"
+        PRODUCT_BUNDLE_IDENTIFIER: com.jbdotparty.filos
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # idevice's static lib pulls in C++ symbols (aws-lc); link libc++.
+        OTHER_LDFLAGS: "-lc++"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/Frameworks"
+
+schemes:
+  Filos:
+    build:
+      targets:
+        Filos: all
+    run:
+      config: Release
+    archive:
+      config: Release

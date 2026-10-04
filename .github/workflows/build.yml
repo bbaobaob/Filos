@@ -1,0 +1,42 @@
+name: Build
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-latest
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+      IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source "$HOME/.cargo/env"
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+      - name: Build rust-core and package AirliftFFI.xcframework
+        run: |
+          source "$HOME/.cargo/env"
+          ./build-ios.sh
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Build Filos (unsigned Release)
+        run: |
+          xcodebuild -project Filos.xcodeproj -scheme Filos \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedDataApp clean build \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+      - name: Package unsigned IPA
+        run: |
+          APP=$(find build/DerivedDataApp -name 'Filos.app' -type d | head -n 1)
+          mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          cd build && zip -qry Filos-airlift.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Filos-airlift-ipa
+          path: build/Filos-airlift.ipa

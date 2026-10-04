@@ -26,6 +26,13 @@ fi
 
 cd build
 
+if command -v xcodegen &> /dev/null; then
+    echo "[*] Generating Xcode project (xcodegen)..."
+    cd "$WORKING_LOCATION"
+    xcodegen generate
+    cd build
+fi
+
 echo "[*] Building..."
 if [[ $* == *--debug* ]]; then
 xcodebuild -project "$WORKING_LOCATION/$APPLICATION_NAME.xcodeproj" \

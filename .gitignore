@@ -10,3 +10,8 @@ xcuserdata/
 *.ipa
 *.deb
 package-root
+rust-core/target/
+Filos.xcodeproj/
+DerivedData
+build/
+.github/workflows/*.log

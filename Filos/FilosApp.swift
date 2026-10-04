@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AirliftFFI
 
 import UniformTypeIdentifiers
 
@@ -28,7 +29,17 @@ struct FilosApp: App {
         let fixMethod = class_getInstanceMethod(UIDocumentPickerViewController.self, #selector(UIDocumentPickerViewController.fix_init(forOpeningContentTypes:asCopy:)))!
         let origMethod = class_getInstanceMethod(UIDocumentPickerViewController.self, #selector(UIDocumentPickerViewController.init(forOpeningContentTypes:asCopy:)))!
         method_exchangeImplementations(origMethod, fixMethod)
-        
+
+        // Route rust-core / idevice logs into AirLiftLogSink (consumed by AirLiftModel).
+        al_log_init({ _, msg in
+            guard let msg = msg else { return }
+            let line = String(cString: msg)
+            DispatchQueue.main.async { AirLiftLogSink.append(line) }
+        }, nil)
+
+        // Ensure the Grappa helper symbol is retained and linked into the binary.
+        _ = ALGetGrappaToken(0, 0, 0, nil, 0, nil, nil, 0)
+
         #if DEBUG
         weOnADebugBuild = true
         #else
@@ -82,3 +93,18 @@ extension UIDocumentPickerViewController {
         return fix_init(forOpeningContentTypes: contentTypes, asCopy: true)
     }
 }
+
+// MARK: - Grappa helper
+
+// Defined in Filos/Airlift/GrappaHelper.m and dlsym'd by the rust core.
+@_silgen_name("ALGetGrappaToken")
+func ALGetGrappaToken(
+    _ inVersion: UInt32,
+    _ inDeviceType: UInt32,
+    _ inProtocolVersion: UInt32,
+    _ outBuf: UnsafeMutablePointer<UInt8>?,
+    _ maxLen: Int,
+    _ outLen: UnsafeMutablePointer<Int>?,
+    _ errBuf: UnsafeMutablePointer<CChar>?,
+    _ errLen: Int
+) -> Int32
