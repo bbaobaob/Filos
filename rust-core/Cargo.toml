@@ -24,6 +24,9 @@ idevice = { git = "https://github.com/jkcoxson/idevice.git", rev = "7bd551c16c6d
   "usbmuxd",
   "syslog_relay",
   "installation_proxy",
+  # com.apple.mobile.house_arrest.shim.remote — vends an app's Data container
+  # as AFC (VendContainer), which is how app data is browsed.
+  "house_arrest",
 ] }
 
 # idevice-ffi for tunnel_create_rppairing + AFC C FFI (re-exports its #[no_mangle] symbols).

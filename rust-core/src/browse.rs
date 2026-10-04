@@ -28,7 +28,7 @@ use std::sync::{Mutex, MutexGuard};
 use idevice::afc::opcode::AfcFopenMode;
 use idevice::afc::AfcClient;
 
-use crate::exploit::{connect_tunnel, Logger, ALLogCallback};
+use crate::exploit::{connect_tunnel, AppDeviceTunnel, Logger, ALLogCallback};
 use crate::ffi_util::{cstr, opt_str, run_with_large_stack};
 
 /// Largest file `al_file_read` will pull over the wire (16 MiB).
@@ -131,9 +131,10 @@ fn path_candidates(path: &str) -> Vec<String> {
     //      /var/mobile/X        -> ../X  (exactly one level above the root)
     // The `..` is a fixed, bounded mapping derived from the prefixes below —
     // never from caller input, which `checked_path` already rejects.
-    // `/private` is peeled first so the usual `/private/var/mobile/...`
-    // spelling maps the same way.
-    let normalized = path.strip_prefix("/private/").unwrap_or(path);
+    // `/private` is peeled first (without its trailing slash, so the result
+    // keeps the leading `/` the prefix checks below expect) and the `/private/var`
+    // spelling of step 1 maps identically.
+    let normalized = path.strip_prefix("/private").unwrap_or(path);
     if let Some(mapped) = afc_relative_path(normalized) {
         push(mapped.clone());
         if !mapped.ends_with('/') {
@@ -255,6 +256,57 @@ async fn open_afc(pairing_path: &str, logger: &Logger) -> Result<AfcClient, Stri
         .map_err(|e| format!("Failed to read pairing file at {pairing_path}: {e}"))?;
     let mut tunnel = connect_tunnel(&pairing_bytes, logger).await?;
     tunnel.connect_afc(logger).await
+}
+
+/// Container-rooted AFC: `list_dir_json` and friends are reused verbatim, they
+/// just talk to an `AfcClient` whose root is an app's Data container instead of
+/// `/var/mobile/Media`. House arrest paths are container-relative (`/`,
+/// `/Documents`, `/Library/Preferences`), so no candidate mapping is applied —
+/// the caller's path is used as given.
+type HouseAfc = AfcClient;
+
+/// Open the AFC connection house_arrest vends for `bundle_id`.
+///
+/// The returned `AfcClient` is rooted *at* the app's Data container, so every
+/// path handed to it afterwards is container-relative (`/`, `/Documents`, …).
+async fn open_house_afc(pairing_path: &str, bundle_id: &str, logger: &Logger) -> Result<HouseAfc, String> {
+    if bundle_id.trim().is_empty() {
+        return Err("bundle_id must not be empty".to_owned());
+    }
+    let pairing_bytes = std::fs::read(pairing_path)
+        .map_err(|e| format!("Failed to read pairing file at {pairing_path}: {e}"))?;
+    let mut tunnel = connect_tunnel(&pairing_bytes, logger).await?;
+    tunnel.house_arrest_container(bundle_id.trim(), logger).await
+}
+
+/// Validate a container-relative path handed to the house_arrest helpers.
+///
+/// House arrest AFC is rooted *inside* one app container, so `..` can never be
+/// useful: it is either a no-op or an escape attempt. Refuse it, and require an
+/// absolute (container-relative) path so `""` never silently means the root.
+fn checked_container_path(path: &str) -> Result<String, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("container path must not be empty (use \"/\" for the container root)".to_owned());
+    }
+    if !trimmed.starts_with('/') {
+        return Err(format!(
+            "container path must be absolute inside the app container, got '{trimmed}'"
+        ));
+    }
+    if trimmed.split('/').any(|component| component == "..") {
+        return Err(format!("container path must not contain '..', got '{trimmed}'"));
+    }
+    Ok(trimmed.to_owned())
+}
+
+/// `/private/var/…` and `/var/…` name the same place on device; the Swift side
+/// compares the `/var` spelling, so normalise the device's answer to match.
+fn normalize_container_path(path: &str) -> String {
+    match path.strip_prefix("/private/var/") {
+        Some(rest) => format!("/var/{rest}"),
+        None => path.to_owned(),
+    }
 }
 
 async fn list_dir_json(afc: &mut AfcClient, path: &str) -> Result<String, String> {
@@ -508,6 +560,226 @@ pub unsafe fn file_delete(
 }
 
 // ---------------------------------------------------------------------------
+// Installed app listing (InstallationProxy over the same tunnel)
+// ---------------------------------------------------------------------------
+
+/// Turn an InstallationProxy lookup into
+/// `[{"bundle_id":…,"name":…,"path":…,"group_containers":{…}}, …]`.
+async fn list_apps_json(tunnel: &mut AppDeviceTunnel, logger: &Logger) -> Result<String, String> {
+    let mut client = tunnel.connect_installation_proxy(logger).await?;
+    let apps = client
+        .get_apps(Some("Any"), None)
+        .await
+        .map_err(|e| format!("InstallationProxy get_apps failed: {e:?}"))?;
+
+    // `get_apps` returns a HashMap, so sort by bundle id to keep the JSON (and
+    // therefore the UI order) stable across calls.
+    let mut bundle_ids: Vec<&String> = apps.keys().collect();
+    bundle_ids.sort();
+
+    let mut entries: Vec<serde_json::Value> = Vec::with_capacity(bundle_ids.len());
+    for bundle_id in bundle_ids {
+        let Some(value) = apps.get(bundle_id) else { continue };
+        let Some(dict) = value.as_dictionary() else { continue };
+
+        let path = dict
+            .get("Container")
+            .and_then(|v| v.as_string())
+            .map(normalize_container_path)
+            .unwrap_or_default();
+
+        // InstallationProxy spells the display name a few different ways
+        // depending on how the app was installed.
+        let name = ["CFBundleDisplayName", "CFBundleName", "CFBundleExecutable"]
+            .iter()
+            .find_map(|key| dict.get(*key).and_then(|v| v.as_string()))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| bundle_id.as_str());
+
+        let mut group_containers = serde_json::Map::new();
+        if let Some(plist::Value::Dictionary(groups)) = dict.get("GroupContainers") {
+            for (group_id, group_path) in groups {
+                if let Some(group_path) = group_path.as_string() {
+                    group_containers
+                        .insert(group_id.clone(), serde_json::Value::String(normalize_container_path(group_path)));
+                }
+            }
+        }
+
+        entries.push(serde_json::json!({
+            "bundle_id": bundle_id,
+            "name": name,
+            "path": path,
+            "group_containers": serde_json::Value::Object(group_containers),
+        }));
+    }
+
+    logger.log(format!("airlift: InstallationProxy listed {} app(s)", entries.len()));
+    Ok(serde_json::Value::Array(entries).to_string())
+}
+
+/// # Safety
+/// All pointer args must be null or valid for their documented use.
+pub unsafe fn list_apps(
+    pairing_path: *const c_char,
+    log_cb: ALLogCallback,
+    ctx: *mut c_void,
+    out_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    if out_json.is_null() && out_error.is_null() {
+        return 2;
+    }
+
+    let pairing_path = opt_str(pairing_path, "airlift_pairing.plist");
+    let ctx_usize = ctx as usize;
+
+    let res = run_with_large_stack("al_list_apps", move || {
+        let logger = Logger::new(log_cb, ctx_usize as *mut c_void);
+        let _guard = lock_tunnel("al_list_apps");
+        idevice_ffi::run_sync_local(async move {
+            let pairing_bytes = std::fs::read(&pairing_path)
+                .map_err(|e| format!("Failed to read pairing file at {pairing_path}: {e}"))?;
+            let mut tunnel = connect_tunnel(&pairing_bytes, &logger).await?;
+            list_apps_json(&mut tunnel, &logger).await
+        })
+    });
+
+    finish_string_result(res, "al_list_apps", out_json, out_error)
+}
+
+// ---------------------------------------------------------------------------
+// House arrest: browse inside one app's Data container
+// ---------------------------------------------------------------------------
+
+/// # Safety
+/// All pointer args must be null or valid for their documented use.
+pub unsafe fn house_list(
+    pairing_path: *const c_char,
+    bundle_id: *const c_char,
+    path: *const c_char,
+    log_cb: ALLogCallback,
+    ctx: *mut c_void,
+    out_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    if out_json.is_null() && out_error.is_null() {
+        return 2;
+    }
+
+    let pairing_path = opt_str(pairing_path, "airlift_pairing.plist");
+    let bundle_id = opt_str(bundle_id, "");
+    let requested = opt_str(path, "/");
+    let ctx_usize = ctx as usize;
+
+    let res = run_with_large_stack("al_house_list", move || {
+        let logger = Logger::new(log_cb, ctx_usize as *mut c_void);
+        let path = checked_container_path(&requested)?;
+        let _guard = lock_tunnel("al_house_list");
+        idevice_ffi::run_sync_local(async move {
+            let mut afc = open_house_afc(&pairing_path, &bundle_id, &logger).await?;
+            logger.log(format!(
+                "airlift: house_arrest vended '{bundle_id}', listing container-relative '{path}'"
+            ));
+            list_dir_json(&mut afc, &path).await
+        })
+    });
+
+    finish_string_result(res, "al_house_list", out_json, out_error)
+}
+
+/// # Safety
+/// All pointer args must be null or valid for their documented use.
+pub unsafe fn house_files(
+    pairing_path: *const c_char,
+    bundle_id: *const c_char,
+    path: *const c_char,
+    out_b64: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let pairing_path = opt_str(pairing_path, "airlift_pairing.plist");
+    let bundle_id = opt_str(bundle_id, "");
+    let requested = opt_str(path, "");
+
+    let res = run_with_large_stack("al_house_files", move || {
+        let logger = Logger::new(None, std::ptr::null_mut());
+        let path = checked_container_path(&requested)?;
+        let _guard = lock_tunnel("al_house_files");
+        idevice_ffi::run_sync_local(async move {
+            let mut afc = open_house_afc(&pairing_path, &bundle_id, &logger).await?;
+            let data = read_file_bytes(&mut afc, &path).await?;
+            Ok(base64_encode(&data))
+        })
+    });
+
+    finish_string_result(res, "al_house_files", out_b64, out_error)
+}
+
+/// # Safety
+/// All pointer args must be null or valid for their documented use.
+pub unsafe fn house_write(
+    pairing_path: *const c_char,
+    bundle_id: *const c_char,
+    path: *const c_char,
+    b64_content: *const c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let pairing_path = opt_str(pairing_path, "airlift_pairing.plist");
+    let bundle_id = opt_str(bundle_id, "");
+    let requested = opt_str(path, "");
+    let encoded = opt_str(b64_content, "");
+
+    let res = run_with_large_stack("al_house_write", move || {
+        let logger = Logger::new(None, std::ptr::null_mut());
+        let path = checked_container_path(&requested)?;
+        // An empty payload is valid (creates/truncates an empty file).
+        let data = base64_decode(&encoded)?;
+        let _guard = lock_tunnel("al_house_write");
+        idevice_ffi::run_sync_local(async move {
+            let mut afc = open_house_afc(&pairing_path, &bundle_id, &logger).await?;
+            write_file_bytes(&mut afc, &path, &data).await?;
+            logger.log(format!(
+                "airlift: wrote {} bytes to '{bundle_id}:{path}'",
+                data.len()
+            ));
+            Ok(())
+        })
+    });
+
+    finish_void_result(res, "al_house_write", out_error)
+}
+
+/// # Safety
+/// All pointer args must be null or valid for their documented use.
+pub unsafe fn house_delete(
+    pairing_path: *const c_char,
+    bundle_id: *const c_char,
+    path: *const c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let pairing_path = opt_str(pairing_path, "airlift_pairing.plist");
+    let bundle_id = opt_str(bundle_id, "");
+    let requested = opt_str(path, "");
+
+    let res = run_with_large_stack("al_house_delete", move || {
+        let logger = Logger::new(None, std::ptr::null_mut());
+        let path = checked_container_path(&requested)?;
+        if path == "/" {
+            return Err("refusing to delete the container root".to_owned());
+        }
+        let _guard = lock_tunnel("al_house_delete");
+        idevice_ffi::run_sync_local(async move {
+            let mut afc = open_house_afc(&pairing_path, &bundle_id, &logger).await?;
+            delete_path(&mut afc, &path).await?;
+            logger.log(format!("airlift: deleted '{bundle_id}:{path}'"));
+            Ok(())
+        })
+    });
+
+    finish_void_result(res, "al_house_delete", out_error)
+}
+
+// ---------------------------------------------------------------------------
 // Result plumbing (mirrors exploit.rs: 0 on success, 1 on error)
 // ---------------------------------------------------------------------------
 
@@ -557,7 +829,10 @@ fn set_error(out_error: *mut *mut c_char, message: String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{afc_relative_path, base64_decode, base64_encode, checked_path, path_candidates};
+    use super::{
+        afc_relative_path, base64_decode, base64_encode, checked_container_path, checked_path,
+        normalize_container_path, path_candidates,
+    };
 
     #[test]
     fn base64_round_trips() {
@@ -590,6 +865,32 @@ mod tests {
 
         let candidates = path_candidates("/private/var/tmp");
         assert!(candidates.contains(&"/var/tmp".to_owned()));
+    }
+
+    #[test]
+    fn container_paths_must_stay_inside_the_container() {
+        assert_eq!(checked_container_path("/").unwrap(), "/");
+        assert_eq!(checked_container_path("/Documents").unwrap(), "/Documents");
+        assert_eq!(
+            checked_container_path("/Library/Preferences").unwrap(),
+            "/Library/Preferences"
+        );
+        assert!(checked_container_path("").is_err());
+        assert!(checked_container_path("Documents").is_err());
+        assert!(checked_container_path("/../..").is_err());
+        assert!(checked_container_path("/Documents/../Library").is_err());
+    }
+
+    #[test]
+    fn device_container_paths_are_normalized() {
+        assert_eq!(
+            normalize_container_path("/private/var/mobile/Containers/Data/Application/ABC"),
+            "/var/mobile/Containers/Data/Application/ABC"
+        );
+        assert_eq!(
+            normalize_container_path("/var/mobile/Containers/Data/Application/ABC"),
+            "/var/mobile/Containers/Data/Application/ABC"
+        );
     }
 
     #[test]

@@ -7,6 +7,9 @@
 //!   al_exploit_run         — run the AirTraffic exploit over the loopback tunnel
 //!   al_dir_list            — list a remote directory as JSON over AFC
 //!   al_file_read/write/delete — read / write / delete one remote file over AFC
+//!   al_list_apps           — list installed apps + their container paths
+//!   al_house_list/files/write/delete — browse one app's Data container via
+//!                             com.apple.mobile.house_arrest (VendContainer)
 //!   al_string_free         — free any char* returned by this library
 
 use std::ffi::{c_char, c_void};
@@ -320,6 +323,150 @@ pub unsafe extern "C" fn al_file_delete(
         Err(e) => {
             if !out_error.is_null() {
                 *out_error = ffi_util::cstr(format!("Rust panic in al_file_delete: {e:?}"));
+            }
+            1
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Installed apps + house_arrest container browsing
+// ---------------------------------------------------------------------------
+
+/// List every installed app as
+/// `[{"bundle_id":…,"name":…,"path":…,"group_containers":{groupId:path}}, …]`.
+/// `out_json` receives that JSON on success.
+///
+/// # Safety
+/// All pointer arguments must be null or valid for their documented use.
+#[no_mangle]
+pub unsafe extern "C" fn al_list_apps(
+    pairing_path: *const c_char,
+    log_cb: exploit::ALLogCallback,
+    ctx: *mut c_void,
+    out_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        browse::list_apps(pairing_path, log_cb, ctx, out_json, out_error)
+    }));
+    match res {
+        Ok(rc) => rc,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = ffi_util::cstr(format!("Rust panic in al_list_apps: {e:?}"));
+            }
+            1
+        }
+    }
+}
+
+/// List a directory inside one app's Data container over house_arrest.
+///
+/// `path` is *container-relative* — `/`, `/Documents`, `/Library/Preferences` —
+/// because the AFC connection house_arrest vends is rooted at the container.
+/// `out_json` receives `[{"name":…,"is_dir":…,"size":…}, …]`.
+///
+/// # Safety
+/// All pointer arguments must be null or valid for their documented use.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn al_house_list(
+    pairing_path: *const c_char,
+    bundle_id: *const c_char,
+    path: *const c_char,
+    log_cb: exploit::ALLogCallback,
+    ctx: *mut c_void,
+    out_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        browse::house_list(pairing_path, bundle_id, path, log_cb, ctx, out_json, out_error)
+    }));
+    match res {
+        Ok(rc) => rc,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = ffi_util::cstr(format!("Rust panic in al_house_list: {e:?}"));
+            }
+            1
+        }
+    }
+}
+
+/// Read a file from inside an app's Data container. `out_b64` receives its
+/// base64 contents on success. Files over 16 MiB are refused.
+///
+/// # Safety
+/// All pointer arguments must be null or valid for their documented use.
+#[no_mangle]
+pub unsafe extern "C" fn al_house_files(
+    pairing_path: *const c_char,
+    bundle_id: *const c_char,
+    path: *const c_char,
+    out_b64: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        browse::house_files(pairing_path, bundle_id, path, out_b64, out_error)
+    }));
+    match res {
+        Ok(rc) => rc,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = ffi_util::cstr(format!("Rust panic in al_house_files: {e:?}"));
+            }
+            1
+        }
+    }
+}
+
+/// Write base64 `b64_content` to a container-relative `path` (created/truncated).
+///
+/// # Safety
+/// All pointer arguments must be null or valid for their documented use.
+#[no_mangle]
+pub unsafe extern "C" fn al_house_write(
+    pairing_path: *const c_char,
+    bundle_id: *const c_char,
+    path: *const c_char,
+    b64_content: *const c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        browse::house_write(pairing_path, bundle_id, path, b64_content, out_error)
+    }));
+    match res {
+        Ok(rc) => rc,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = ffi_util::cstr(format!("Rust panic in al_house_write: {e:?}"));
+            }
+            1
+        }
+    }
+}
+
+/// Delete a container-relative `path` (recursively when it is a directory).
+/// The container root itself is refused.
+///
+/// # Safety
+/// All pointer arguments must be null or valid for their documented use.
+#[no_mangle]
+pub unsafe extern "C" fn al_house_delete(
+    pairing_path: *const c_char,
+    bundle_id: *const c_char,
+    path: *const c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        browse::house_delete(pairing_path, bundle_id, path, out_error)
+    }));
+    match res {
+        Ok(rc) => rc,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = ffi_util::cstr(format!("Rust panic in al_house_delete: {e:?}"));
             }
             1
         }

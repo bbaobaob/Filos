@@ -154,6 +154,68 @@ int32_t al_file_delete(const char *pairing_path,
                        char **out_error);
 
 // ---------------------------------------------------------------------------
+// Installed apps + app-container browsing (InstallationProxy + house_arrest)
+// ---------------------------------------------------------------------------
+
+// List every installed app. BLOCKS — run off the main thread.
+// `log_cb`        — receives log lines (may be NULL).
+// `out_json`      — on success receives
+//                   [{"bundle_id":"com.apple.mobilesafari",
+//                     "name":"Safari",
+//                     "path":"/var/mobile/Containers/Data/Application/<UUID>",
+//                     "group_containers":{"group.com.example":"…"}}, …].
+//                   Free with al_string_free().
+// `out_error`     — set on failure; free with al_string_free().
+// Returns 0 on success, 1 on error, 2 if both out pointers are NULL.
+int32_t al_list_apps(const char *pairing_path,
+                     ALLogCallback log_cb,
+                     void *ctx,
+                     char **out_json,
+                     char **out_error);
+
+// List a directory inside one app's Data container, reached through
+// com.apple.mobile.house_arrest (VendContainer). BLOCKS — run off the main thread.
+//
+// `path` is CONTAINER-RELATIVE, not a device path: "/" is the container root,
+// so "/Documents" and "/Library/Preferences" are the natural inputs. Paths
+// containing ".." are refused — house arrest AFC is rooted inside the container
+// and the caller must not try to leave it.
+// `out_json` receives [{"name":…,"is_dir":…,"size":…}, …] like al_dir_list.
+//
+// Apps installed without a developer profile can answer PermDenied; that error
+// is surfaced verbatim rather than hidden.
+int32_t al_house_list(const char *pairing_path,
+                      const char *bundle_id,
+                      const char *path,
+                      ALLogCallback log_cb,
+                      void *ctx,
+                      char **out_json,
+                      char **out_error);
+
+// Read one file from inside an app's Data container (container-relative path).
+// BLOCKS — run off the main thread. Files over 16 MiB are refused.
+int32_t al_house_files(const char *pairing_path,
+                       const char *bundle_id,
+                       const char *path,
+                       char **out_b64,
+                       char **out_error);
+
+// Write base64 `b64_content` to a container-relative `path` (created/truncated).
+// BLOCKS — run off the main thread. Payloads over 16 MiB are refused.
+int32_t al_house_write(const char *pairing_path,
+                       const char *bundle_id,
+                       const char *path,
+                       const char *b64_content,
+                       char **out_error);
+
+// Delete a container-relative `path` (recursively when it is a directory).
+// BLOCKS — run off the main thread. "/" is refused.
+int32_t al_house_delete(const char *pairing_path,
+                        const char *bundle_id,
+                        const char *path,
+                        char **out_error);
+
+// ---------------------------------------------------------------------------
 // Syslog Stream / Live Card Detection
 // ---------------------------------------------------------------------------
 

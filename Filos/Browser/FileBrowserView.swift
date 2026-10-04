@@ -338,29 +338,116 @@ struct FileBrowserView: View {
         // visible to the sandboxed FileManager — enumerate them over the tunnel.
         if AirLiftBrowse.isRemotePath(path) {
             currentState = .loading
-            switch AirLiftBrowse.shared.listDir(path) {
-            case .success(let entries):
-                applyRemoteListing(entries)
-                return
-            case .failure(let error):
-                // Fresh tunnel failed — serve the cached listing if there is one.
-                if let cached = AirLiftBrowse.shared.cachedListing(for: path) {
-                    print("[!] remote listing failed for \(path) (\(error)); serving cached entries")
-                    applyRemoteListing(cached)
-                    return
-                }
-                // No cache, and FileManager cannot see this path anyway: its
-                // error would be a sandbox code 257 dressed up as "no
-                // permission", which is never the truth here. Show the real
-                // FFI failure instead.
-                print("[!] remote listing failed for \(path): \(error)")
-                localizedError = "Could not list this directory over the Airlift tunnel:\n\(error)"
-                currentState = .unknownError
-                return
-            }
+            loadRemoteDirFiles(path: path)
+            return
         }
 
         loadLocalDirFiles()
+    }
+
+    /// Remote enumeration, routed by what the path actually is.
+    ///
+    ///   * `/var/mobile/Containers/Data/Application` — InstallationProxy knows
+    ///     every installed app's container directory, so the listing comes from
+    ///     `al_list_apps` instead of a UUID-directory AFC guess.
+    ///   * anything inside one of those containers — `com.apple.mobile.house_arrest`
+    ///     vends the container as AFC, which is the only thing that can actually
+    ///     open it.
+    ///   * everything else (`/var/mobile/Library/…`, `/var/tmp`, AppGroup) —
+    ///     plain AFC, as before.
+    private func loadRemoteDirFiles(path: String) {
+        if AirLiftBrowse.isAppContainerRoot(path) {
+            loadAppContainerRoot(path: path)
+            return
+        }
+        if AirLiftBrowse.isInsideAppContainerRoot(path) {
+            // Resolving a container to a bundle id needs the app index. Populate
+            // it on a cold start (deep link straight into a container), then
+            // re-resolve.
+            if AirLiftBrowse.shared.cachedApps() == nil {
+                _ = AirLiftBrowse.shared.listApps()
+            }
+            if let info = AirLiftBrowse.shared.containerInfo(forDevicePath: path) {
+                loadContainerDirectory(path: path, bundleId: info.bundleId, relativePath: info.relativePath)
+                return
+            }
+            // Under the container root but not one of the known containers: a
+            // container that was deleted underneath us, or an app hidden from
+            // InstallationProxy. House arrest cannot address it — say so rather
+            // than blaming AFC.
+            let message = "No installed app owns \(path). The container may have been deleted, or its app is hidden from InstallationProxy."
+            print("[!] \(message)")
+            localizedError = message
+            currentState = .unknownError
+            return
+        }
+        loadAFCDirectory(path: path)
+    }
+
+    /// `/var/mobile/Containers/Data/Application` — one row per installed app,
+    /// labelled from InstallationProxy (display name + bundle id) instead of a
+    /// metadata plist read through AFC.
+    private func loadAppContainerRoot(path: String) {
+        switch AirLiftBrowse.shared.listApps() {
+        case .success(let apps):
+            applyAppListing(apps)
+        case .failure(let error):
+            print("[!] al_list_apps failed for \(path): \(error)")
+            localizedError = "Could not list installed apps over the Airlift tunnel:\n\(error)"
+            currentState = .unknownError
+        }
+    }
+
+    /// A directory inside one app's Data container, via house_arrest.
+    private func loadContainerDirectory(path: String, bundleId: String, relativePath: String) {
+        switch AirLiftBrowse.shared.houseList(bundleId: bundleId, path: relativePath) {
+        case .success(let entries):
+            applyRemoteListing(entries)
+        case .failure(let error):
+            print("[!] house_arrest listing failed for \(bundleId)\(relativePath): \(error)")
+            localizedError = "Could not open \(bundleId) through house_arrest:\n\(error)"
+            currentState = .unknownError
+        }
+    }
+
+    /// Every other remote path — plain AFC over the same tunnel.
+    private func loadAFCDirectory(path: String) {
+        switch AirLiftBrowse.shared.listDir(path) {
+        case .success(let entries):
+            applyRemoteListing(entries)
+            return
+        case .failure(let error):
+            // Fresh tunnel failed — serve the cached listing if there is one.
+            if let cached = AirLiftBrowse.shared.cachedListing(for: path) {
+                print("[!] remote listing failed for \(path) (\(error)); serving cached entries")
+                applyRemoteListing(cached)
+                return
+            }
+            // No cache, and FileManager cannot see this path anyway: its
+            // error would be a sandbox code 257 dressed up as "no
+            // permission", which is never the truth here. Show the real
+            // FFI failure instead.
+            print("[!] remote listing failed for \(path): \(error)")
+            localizedError = "Could not list this directory over the Airlift tunnel:\n\(error)"
+            currentState = .unknownError
+            return
+        }
+    }
+
+    /// Turn installed apps into container rows. Each row's URL is the real
+    /// container directory (`…/Application/<UUID>`) so tapping it navigates into
+    /// the container, and the name/bundle-id labelling from `appRowLabels`
+    /// keeps working.
+    private func applyAppListing(_ apps: [AppEntry]) {
+        let unsorted = apps.compactMap { app -> FileItem? in
+            guard !app.path.isEmpty else { return nil }
+            let url = URL(fileURLWithPath: app.path)
+            return remoteFileItem(name: app.name.isEmpty ? app.bundle_id : app.name, isDirectory: true, size: 0, url: url)
+        }
+        let sorted = sortFiles(files: unsorted)
+        dirFiles = sorted
+        unfilteredFiles = sorted
+        currentState = sorted.isEmpty ? .noFiles : .loaded
     }
 
     /// Turn remote AFC entries into rows for the current directory.

@@ -97,6 +97,11 @@ func appRowLabels(url: URL) -> (title: String, subtitle: String?) {
         // AppGroup leads with the owning bundle id; the UUID is the fallback.
         return (title: bundleID, subtitle: url.lastPathComponent)
     case .container, .bundle:
+        // InstallationProxy already knows both halves of the label for a Data
+        // container (display name + bundle id) — no plist round trip needed.
+        if let app = AirLiftBrowse.shared.app(forContainerPath: url.path) {
+            return (title: app.name.isEmpty ? app.bundle_id : app.name, subtitle: app.bundle_id)
+        }
         let name = getNameFromInfP(url) ?? bundleID
         return (title: name, subtitle: bundleID)
     case .normal:
