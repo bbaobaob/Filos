@@ -262,13 +262,24 @@ final class AirLiftModel: ObservableObject {
 
         let browse = AirLiftBrowse.shared
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let count = (try? browse.listApps().count) ?? 0
+            let outcome = browse.listApps()
+            let count: Int
+            var warmUpError: String?
+            switch outcome {
+            case .success(let apps):
+                count = apps.count
+            case .failure(let error):
+                count = 0
+                warmUpError = error
+            }
             Task { @MainActor in
                 guard let self else { return }
                 self.launchStatus = "ready"
                 self.launchFailed = false
                 self.log("launch: browse-ready mode (exploit not run automatically)")
-                if count > 0 {
+                if let warmUpError {
+                    self.log("launch: app list warm-up failed: \(warmUpError)")
+                } else if count > 0 {
                     self.log("launch: warmed \(count) app containers")
                 }
                 // Any browser already on screen may have listed files against a
