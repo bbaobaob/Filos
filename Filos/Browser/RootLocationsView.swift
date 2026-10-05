@@ -12,7 +12,6 @@ struct RootLocationsView: View {
     @EnvironmentObject var mgr: FilosManager
     @StateObject private var airlift = AirLiftModel.shared
 
-    @State private var showAirLift = false
     @State private var showLogs = false
     @State private var showSettings = false
 
@@ -80,22 +79,8 @@ struct RootLocationsView: View {
         .customListStyle(listStyle)
         .adaptiveListMargin()
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    showAirLift = true
-                } label: {
-                    Label("Airlift", systemImage: "airplane")
-                }
-            }
-
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button {
-                        showAirLift = true
-                    } label: {
-                        Label("Airlift", systemImage: "airplane")
-                    }
-
                     Button {
                         showLogs = true
                     } label: {
@@ -112,10 +97,6 @@ struct RootLocationsView: View {
                 }
                 .labelStyle(.iconOnly)
             }
-        }
-        .sheet(isPresented: $showAirLift) {
-            AirLiftView()
-                .environmentObject(mgr)
         }
         .sheet(isPresented: $showLogs) {
             LogView()

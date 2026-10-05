@@ -60,18 +60,8 @@ final class AirLiftModel: ObservableObject {
 
     /// Absolute iOS directories Airlift can write into.
     static let defaultTargets: [String] = [
-        "/var/mobile",
-        "/var/mobile/Documents",
-        "/var/mobile/Library",
-        "/var/mobile/Library/Preferences",
-        "/var/mobile/Library/Caches",
-        "/var/mobile/Library/SpringBoard",
-        "/var/mobile/Library/SMS",
-        "/var/mobile/Library/Safari",
-        "/var/mobile/Containers",
         "/var/mobile/Containers/Data/Application",
         "/var/mobile/Containers/Shared/AppGroup",
-        "/var/tmp"
     ]
 
     /// Mirrors the pairing state published by `PairingController`.

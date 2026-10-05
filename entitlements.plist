@@ -4,8 +4,6 @@
 <dict>
 	<key>platform-application</key>
 	<true/>
-	<key>com.apple.private.security.no-sandbox</key>
-	<true/>
 	<key>com.apple.private.security.storage.AppDataContainers</key>
 	<true/>
 	<key>com.apple.private.skip-library-validation</key>
