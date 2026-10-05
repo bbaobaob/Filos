@@ -83,18 +83,21 @@ func getNameFromInfP(_ url: URL) -> String? {
 /// Row title with subtitle for Application (Data) containers and Shared/AppGroup
 /// containers:
 ///   * container / bundle — display name, bundle id underneath.
-///   * appGroup — owning bundle id first, container UUID underneath.
+///   * appGroup — owning app display name, bundle id underneath (the bare
+///     container UUID is never the title when the owner is known).
+///
+/// The App Group listing comes back from the pulled directory as bare UUID
+/// folder names, so the owner has to come from the InstallationProxy cache
+/// (`AirLiftBrowse.app(forAppGroupPath:)`) — the same data source the
+/// Application container rows use. Nothing here probes the device: a plist read
+/// per row stalls the whole listing.
 func appRowLabels(url: URL) -> (title: String, subtitle: String?) {
     switch getFolderType(url: url) {
     case .appGroup:
         if AirLiftBrowse.isRemotePath(url.path) {
-            // App Group containers are labelled from the cached InstallationProxy
-            // entry only — no plist probe on render.
-            let wanted = AirLiftBrowse.normalizeDevicePath(url.path)
-            if let app = AirLiftBrowse.shared.cachedApps()?.first(where: {
-                $0.group_containers?.values.contains(where: { AirLiftBrowse.normalizeDevicePath($0) == wanted }) == true
-            }) {
-                return (title: app.bundle_id, subtitle: url.lastPathComponent)
+            // Cached InstallationProxy entry only — no plist probe on render.
+            if let hit = AirLiftBrowse.shared.app(forAppGroupPath: url.path) {
+                return (title: hit.app.name.isEmpty ? hit.app.bundle_id : hit.app.name, subtitle: hit.app.bundle_id)
             }
             return (title: url.lastPathComponent, subtitle: "bundle id unavailable")
         }
@@ -129,6 +132,12 @@ func folderLabel(url: URL) -> String {
         return getNameFromInfP(url) ?? url.lastPathComponent
     } else if parent == normalizedFSPath(FSPaths.appContainers) || parent == normalizedFSPath(FSPaths.appGroups) {
         if AirLiftBrowse.isRemotePath(url.path) {
+            // App Group directories are indexed by their own container path, not
+            // by a Data container path — see `app(forAppGroupPath:)`.
+            if parent == normalizedFSPath(FSPaths.appGroups),
+               let hit = AirLiftBrowse.shared.app(forAppGroupPath: url.path) {
+                return hit.app.bundle_id
+            }
             return AirLiftBrowse.shared.app(forContainerPath: url.path)?.bundle_id ?? url.lastPathComponent
         }
         return getBIDFromMCM(url) ?? url.lastPathComponent

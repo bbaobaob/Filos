@@ -704,6 +704,12 @@ async fn write_books_plist(
         let _ = afc.mk_dir(dir).await;
     }
     let plist_bytes = build_pull_manifest(identifiers, preserved)?;
+    logger.log(format!(
+        "airlift: manifest to write = {} byte(s), {} preserved row(s), requested {:?}",
+        plist_bytes.len(),
+        preserved.len(),
+        identifiers
+    ));
     let mut fd = afc
         .open(BOOKS_PLIST, AfcFopenMode::WrOnly)
         .await
@@ -715,7 +721,193 @@ async fn write_books_plist(
     logger.log(format!(
         "airlift: Books.plist manifest now declares {identifiers:?}"
     ));
+    // Read the file back off the device. `write_entire` reporting success only
+    // means the bytes were accepted; the daemon parses whatever is really on
+    // disk, so a short write or a stale file has to be visible here.
+    log_books_plist_on_device(afc, identifiers, logger).await;
     Ok(())
+}
+
+/// Diagnostics for C: what the daemon will actually parse.
+///
+/// AFC-stats `Books/Sync/Books.plist` and reports the size the device reports,
+/// the number of `Books` rows it decodes, and the first row's `Persistent ID`.
+/// A size that differs from what was written, or a row count of 0, or a first
+/// row that is not ours, is the difference between "the daemon refused this
+/// request" and "we never wrote the request we thought we wrote".
+async fn log_books_plist_on_device(
+    afc: &mut AfcClient,
+    identifiers: &[String],
+    logger: &Logger,
+) {
+    match afc.get_file_info(BOOKS_PLIST.to_owned()).await {
+        Ok(info) => logger.log(format!(
+            "airlift: DIAG Books.plist on device: size={} byte(s)",
+            info.size
+        )),
+        Err(e) => {
+            logger.log(format!(
+                "airlift: DIAG Books.plist on device: stat failed ({e:?}) — the manifest may not have landed"
+            ));
+            return;
+        }
+    }
+
+    let mut fd = match afc.open(BOOKS_PLIST.to_owned(), AfcFopenMode::RdOnly).await {
+        Ok(fd) => fd,
+        Err(e) => {
+            logger.log(format!(
+                "airlift: DIAG Books.plist on device: read open failed ({e:?})"
+            ));
+            return;
+        }
+    };
+    let read = fd.read_entire().await;
+    let _ = fd.close().await;
+    let bytes = match read {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            logger.log(format!(
+                "airlift: DIAG Books.plist on device: read failed ({e:?})"
+            ));
+            return;
+        }
+    };
+
+    let value = match plist::from_bytes::<plist::Value>(&bytes) {
+        Ok(value) => value,
+        Err(e) => {
+            logger.log(format!(
+                "airlift: DIAG Books.plist on device: {} byte(s) did not parse as a plist ({e})",
+                bytes.len()
+            ));
+            return;
+        }
+    };
+    let rows = value
+        .as_dictionary()
+        .and_then(|d| d.get("Books"))
+        .and_then(plist::Value::as_array);
+    let Some(rows) = rows else {
+        logger.log(format!(
+            "airlift: DIAG Books.plist on device: {} byte(s) parsed, but there is no 'Books' array",
+            bytes.len()
+        ));
+        return;
+    };
+    let first_id = rows
+        .first()
+        .and_then(|r| r.as_dictionary())
+        .and_then(|d| d.get("Persistent ID"))
+        .and_then(plist::Value::as_string)
+        .unwrap_or("<none>");
+    let requested_first = identifiers.first().map(String::as_str).unwrap_or("<none>");
+    logger.log(format!(
+        "airlift: DIAG Books.plist on device: {} byte(s) parsed, {} Books row(s), first Persistent ID={first_id} (we requested {requested_first})",
+        bytes.len(),
+        rows.len()
+    ));
+    for (n, row) in rows.iter().enumerate() {
+        let id = row
+            .as_dictionary()
+            .and_then(|d| d.get("Persistent ID"))
+            .and_then(plist::Value::as_string)
+            .unwrap_or("<none>");
+        let item = row
+            .as_dictionary()
+            .and_then(|d| d.get("Item ID"))
+            .and_then(plist::Value::as_string)
+            .unwrap_or("<none>");
+        let dsid = row
+            .as_dictionary()
+            .and_then(|d| d.get("DSID"))
+            .and_then(plist::Value::as_string)
+            .unwrap_or("<none>");
+        logger.log(format!(
+            "airlift: DIAG Books.plist row {n}: Persistent ID={id} Item ID={item} DSID={dsid}"
+        ));
+    }
+}
+
+/// What one ATC session actually saw on the wire, so a failed run can explain
+/// itself instead of only reporting `ObjectNotFound`.
+///
+/// Filled by [`atc_asset_sync`] and summarised by [`log_session_diag`] when the
+/// pull never showed up.
+#[derive(Default)]
+struct SyncDiag {
+    ready_observed: bool,
+    manifest_observed: bool,
+    /// `AssetID`/`IsDownload` of every `Book` entry the device sent back.
+    manifest_entries: Vec<String>,
+    /// Verbatim `SyncFailed` payloads, which carry the daemon's real reason.
+    sync_notices: Vec<String>,
+}
+
+impl SyncDiag {
+    fn summary(&self) -> String {
+        format!(
+            "ReadyForSync={} AssetManifest={} manifest entries=[{}] SyncFailed notices={} [{}]",
+            self.ready_observed,
+            self.manifest_observed,
+            self.manifest_entries.join(", "),
+            self.sync_notices.len(),
+            self.sync_notices.join(" | ")
+        )
+    }
+}
+
+/// `AssetID`/`IsDownload` of every `Book` entry in an `AssetManifest` payload.
+///
+/// This is the check that explains "it moved once, then never again": the
+/// device echoes what it believes is pending, and a requested id that comes back
+/// with `IsDownload=false` (or not at all) means our `Books.plist` was not read
+/// as a download request.
+fn manifest_entry_ids(dict: &plist::Dictionary) -> Vec<String> {
+    let Some(params) = dict.get("Params").and_then(|p| p.as_dictionary()) else {
+        return Vec::new();
+    };
+    let Some(manifest) = params.get("AssetManifest").and_then(|m| m.as_dictionary()) else {
+        return Vec::new();
+    };
+    let Some(books) = manifest.get("Book").and_then(|b| b.as_array()) else {
+        return Vec::new();
+    };
+    books
+        .iter()
+        .map(|entry| {
+            let Some(row) = entry.as_dictionary() else {
+                return "<not a dictionary>".to_owned();
+            };
+            let id = row
+                .get("AssetID")
+                .and_then(plist::Value::as_string)
+                .unwrap_or("<no AssetID>");
+            let download = match row.get("IsDownload").and_then(plist::Value::as_boolean) {
+                Some(true) => "IsDownload=true",
+                Some(false) => "IsDownload=false",
+                None => "IsDownload=<absent>",
+            };
+            format!("{id} {download}")
+        })
+        .collect()
+}
+
+/// One-line roll-up of a session's observations, plus the verdict that follows
+/// from them.
+fn log_session_diag(label: &str, diag: &SyncDiag, logger: &Logger) {
+    logger.log(format!("airlift: DIAG {label} session summary: {}", diag.summary()));
+    if !diag.manifest_observed {
+        logger.log(format!(
+            "airlift: DIAG {label}: the device never sent an AssetManifest, so it did not accept the request as a download list (ReadyForSync={})",
+            diag.ready_observed
+        ));
+    }
+    if !diag.manifest_entries.is_empty() {
+        for id in &diag.manifest_entries {
+            logger.log(format!("airlift: DIAG {label}: manifest entry {id}"));
+        }
+    }
 }
 
 /// The AirTraffic handshake plus one `FileComplete` per asset, all in one
@@ -734,6 +926,7 @@ async fn atc_asset_sync(
     destinations: &[String],
     label: &str,
     logger: &Logger,
+    diag: &mut SyncDiag,
 ) -> Result<(), String> {
     if identifiers.len() != destinations.len() {
         return Err(format!(
@@ -865,6 +1058,9 @@ async fn atc_asset_sync(
                         break;
                     }
                     if name == "SyncFailed" {
+                        // The daemon's real reason lives in this payload, not in
+                        // the later ObjectNotFound: keep it for the summary.
+                        diag.sync_notices.push(format!("{dict:?}"));
                         logger.log(format!("airlift: {label}: atc sync notice (non-fatal): {dict:?}"));
                         continue;
                     }
@@ -874,6 +1070,7 @@ async fn atc_asset_sync(
             Err(_) => {}
         }
     }
+    diag.ready_observed = ready;
     if !ready {
         return Err(format!(
             "{label}: AirTraffic ReadyForSync not observed (ensure Apple Books is installed)"
@@ -908,9 +1105,13 @@ async fn atc_asset_sync(
                     }
                     if name == "AssetManifest" {
                         manifest_observed = true;
+                        diag.manifest_observed = true;
+                        diag.manifest_entries = manifest_entry_ids(&dict);
+                        log_session_diag(label, diag, logger);
                         break;
                     }
                     if name == "SyncFailed" {
+                        diag.sync_notices.push(format!("{dict:?}"));
                         logger.log(format!("airlift: {label}: atc manifest notice (non-fatal): {dict:?}"));
                         continue;
                     }
@@ -924,15 +1125,21 @@ async fn atc_asset_sync(
         }
     }
     if !manifest_observed {
+        // Say what the session did see: a SyncFailed here is the difference
+        // between "Books refused the request" and "nothing was ever sent".
+        log_session_diag(label, diag, logger);
         return Err(format!(
-            "{label}: AirTraffic AssetManifest not observed (ensure Apple Books is installed)"
+            "{label}: AirTraffic AssetManifest not observed (ensure Apple Books is installed); {}",
+            diag.summary()
         ));
     }
 
     // FileComplete per asset, in order.
     for (index, (asset_id, asset_path)) in identifiers.iter().zip(destinations.iter()).enumerate() {
+        // Machine-greppable: the exact AssetID/AssetPath pair is the whole
+        // primitive, so a wrong id or a wrong base has to be one grep away.
         logger.log(format!(
-            "airlift: {label}: FileComplete [{}/{}] {asset_id} -> {asset_path}",
+            "airlift: DIAG {label}: FileComplete [{}/{}] AssetID={asset_id} AssetPath={asset_path}",
             index + 1,
             identifiers.len()
         ));
@@ -1243,12 +1450,14 @@ async fn pull_list_and_restore(
         return Err(format!("STEP B manifest failed: {e}"));
     }
 
+    let mut step_b_diag = SyncDiag::default();
     let step_b_sync_error = match atc_asset_sync(
         &mut tunnel,
-        &[asset_id_pull],
+        std::slice::from_ref(&asset_id_pull),
         &[read_dir.clone()],
         "STEP B pull",
         logger,
+        &mut step_b_diag,
     )
     .await
     {
@@ -1278,6 +1487,31 @@ async fn pull_list_and_restore(
             logger.log(format!(
                 "airlift: STEP B: {read_dir} never became listable after {STAGING_POLL_ATTEMPTS} attempts ({e})"
             ));
+            // Explain the silence: the AFC error above says only that the
+            // directory is not there, never why. The session's own record does.
+            log_session_diag("STEP B pull", &step_b_diag, logger);
+            if step_b_diag.sync_notices.is_empty() && !step_b_diag.manifest_observed {
+                logger.log(format!(
+                    "airlift: DIAG STEP B: the device neither sent an AssetManifest nor a SyncFailed for AssetID={asset_id_pull} → AssetPath={read_dir}; the daemon had no pending download for our requested asset"
+                ));
+            } else if !step_b_diag
+                .manifest_entries
+                .iter()
+                .any(|entry| entry.starts_with(&asset_id_pull))
+            {
+                logger.log(format!(
+                    "airlift: DIAG STEP B: the AssetManifest did not list our AssetID={asset_id_pull} (it listed: {})",
+                    if step_b_diag.manifest_entries.is_empty() { "<none>".to_owned() } else { step_b_diag.manifest_entries.join(", ") }
+                ));
+            } else if step_b_diag
+                .manifest_entries
+                .iter()
+                .any(|entry| entry.starts_with(&asset_id_pull) && entry.contains("IsDownload=false"))
+            {
+                logger.log(format!(
+                    "airlift: DIAG STEP B: our AssetID={asset_id_pull} came back with IsDownload=false, so Books.plist was not accepted as a download request for it"
+                ));
+            }
             None
         }
     };
@@ -1333,6 +1567,7 @@ async fn pull_list_and_restore(
             ));
             Vec::new()
         });
+    let mut step_c_diag = SyncDiag::default();
     let step_c_result = async {
         write_books_plist(
             &mut afc,
@@ -1347,6 +1582,7 @@ async fn pull_list_and_restore(
             &[link_dest.clone(), format!("{link_dest}/{basename}")],
             "STEP C restore",
             logger,
+            &mut step_c_diag,
         )
         .await
     }
@@ -1481,6 +1717,7 @@ async fn restore_record(
             ));
             Vec::new()
         });
+    let mut recover_diag = SyncDiag::default();
     let outcome = async {
         stage_restore_symlink(
             tunnel,
@@ -1503,6 +1740,7 @@ async fn restore_record(
             &[link_dest.clone(), format!("{link_dest}/{}", record.basename)],
             "recover",
             logger,
+            &mut recover_diag,
         )
         .await
     }
@@ -1679,7 +1917,7 @@ mod tests {
     use super::{
         asset_id_for_device_path, build_pull_manifest, checked_pull_path,
         link_target_for_parent, media_asset_id, parent_and_basename, preserved_rows,
-        BackupState, BooksSyncBackup, RecoveryRecord,
+        BackupState, BooksSyncBackup, RecoveryRecord, SyncDiag,
     };
 
     const UUID_DIR: &str = "/var/mobile/Containers/Data/Application/DEADBEEF-0000-0000-0000-000000000000/Documents";
@@ -1951,6 +2189,50 @@ mod tests {
         // An empty Books array likewise.
         let (rows, ids) = preserved_rows(Some(&catalog_plist(vec![])), &requested).unwrap();
         assert!(rows.is_empty() && ids.is_empty());
+    }
+
+    #[test]
+    fn manifest_entries_expose_asset_id_and_download_flag() {
+        // A plist dictionary shaped like the daemon's AssetManifest params.
+        let mut entry_ok = plist::Dictionary::new();
+        entry_ok.insert(
+            "AssetID".to_owned(),
+            plist::Value::String("../../../Containers/Data/Application/DEADBEEF".to_owned()),
+        );
+        entry_ok.insert("IsDownload".to_owned(), plist::Value::Boolean(true));
+        let mut entry_not_download = plist::Dictionary::new();
+        entry_not_download.insert("AssetID".to_owned(), plist::Value::String("kept.epub".to_owned()));
+        entry_not_download.insert("IsDownload".to_owned(), plist::Value::Boolean(false));
+        let mut entry_no_flag = plist::Dictionary::new();
+        entry_no_flag.insert("AssetID".to_owned(), plist::Value::String("bare.epub".to_owned()));
+
+        let mut manifest = plist::Dictionary::new();
+        manifest.insert(
+            "Book".to_owned(),
+            plist::Value::Array(vec![
+                plist::Value::Dictionary(entry_ok),
+                plist::Value::Dictionary(entry_not_download),
+                plist::Value::Dictionary(entry_no_flag),
+            ]),
+        );
+        let mut params = plist::Dictionary::new();
+        params.insert("AssetManifest".to_owned(), plist::Value::Dictionary(manifest));
+        let mut dict = plist::Dictionary::new();
+        dict.insert("Command".to_owned(), plist::Value::String("AssetManifest".to_owned()));
+        dict.insert("Params".to_owned(), plist::Value::Dictionary(params));
+
+        let entries = super::manifest_entry_ids(&dict);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(
+            entries[0],
+            "../../../Containers/Data/Application/DEADBEEF IsDownload=true"
+        );
+        assert_eq!(entries[1], "kept.epub IsDownload=false");
+        assert_eq!(entries[2], "bare.epub IsDownload=<absent>");
+
+        // A payload without Params/AssetManifest must not panic or invent rows.
+        assert!(super::manifest_entry_ids(&plist::Dictionary::new()).is_empty());
+        assert!(SyncDiag::default().summary().contains("ReadyForSync=false"));
     }
 
     #[test]

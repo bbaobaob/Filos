@@ -3,19 +3,11 @@
 //  Filos
 //
 //  Swift wrapper around the al_dir_list / al_file_read / al_file_write /
-//  al_file_delete / al_list_apps / al_airlift_list_dir / al_airlift_recover /
-//  al_house_* FFI surface. Used by FileBrowserView for the Airlift target paths
-//  (/var/mobile, /var/tmp, the 12 default targets) since the sandboxed
-//  FileManager cannot see them.
-//
-//  App containers are read back through InstallationProxy (`al_list_apps`) for
-//  the container root and com.apple.mobile.house_arrest (`al_house_*`) for
-//  everything inside one container; AppGroup and every other remote root stay
-//  on plain AFC (`al_dir_list`). The Books AirTraffic "move any object
-//  anywhere" route (`al_airlift_list_dir`) covers the three roots AFC cannot
-//  reach, but it moves the directory to `Airlock/Read` and back, so it is
-//  loop-guarded: at most one session per path and
-//  `maxMoveSessionsPerLaunch` per launch — see `moveListDir(_:)`.
+//  al_file_delete / al_list_apps / al_house_* FFI surface. Used by
+//  FileBrowserView for the Airlift target paths (/var/mobile, /var/tmp, the 12
+//  default targets) since the sandboxed FileManager cannot see them, and for
+//  app containers, which are reached through com.apple.mobile.house_arrest
+//  instead of AFC.
 //
 //  All FFI calls are serialized on one queue (tunnel opens are not
 //  re-entrant) and the last directory listing is cached per path so rows
@@ -62,19 +54,7 @@ final class AirLiftBrowse {
     private var appCache: [AppEntry]?
     /// `Data container path -> app`, built lazily from `appCache`.
     private var appByContainerPath: [String: AppEntry] = [:]
-    /// Paths that already spent their one ATC session this launch. A second
-    /// visit serves the cache instead of starting another AirTraffic sync — this
-    /// is what stops the navigation loop.
-    private var moveAttempted: Set<String> = []
-    /// Failure message of the one attempt a path made, so a reappearance repeats
-    /// the real error instead of a generic "already tried" line.
-    private var moveFailures: [String: String] = [:]
-    /// ATC sessions started this launch, against `maxMoveSessionsPerLaunch`.
-    private var moveSessionCount = 0
     private let cacheLock = NSLock()
-
-    /// Hard cap on ATC-move sessions for the whole app run.
-    static let maxMoveSessionsPerLaunch = 3
 
     private init() {}
 
@@ -85,36 +65,6 @@ final class AirLiftBrowse {
         let roots = ["/var/mobile", "/var/tmp", "/private/var/mobile", "/private/var/tmp"]
         if roots.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) { return true }
         return AirLiftModel.defaultTargets.contains(where: { path == $0 || path.hasPrefix($0 + "/") })
-    }
-
-    // MARK: - Airlift ATC move (loop-guarded)
-
-    /// Device roots the Books ATC move reads. They sit outside AFC's
-    /// `/var/mobile/Media` jail, so `al_dir_list` can never list them; these are
-    /// exactly the roots the Rust side accepts (`checked_pull_path`).
-    static let airliftMoveRoots: [String] = [
-        "/var/mobile/Containers/Data/Application",
-        "/var/mobile/Containers/Shared/AppGroup",
-        "/var/mobile/Applications",
-    ]
-
-    /// True when `path` is listed through the Books ATC move
-    /// (`al_airlift_list_dir`) rather than AFC / InstallationProxy /
-    /// house_arrest.
-    ///
-    /// That call *moves* the directory out to `Airlock/Read/<token>` and back
-    /// through a restore symlink, and on-device testing showed two failure
-    /// modes: it spun the navigation in a loop (a reappearing entry re-triggered
-    /// a pull that re-armed the same entry), and only ever moved once per path
-    /// (the Books asset state read as one-shot, so later pulls answered
-    /// `ObjectNotFound`). Both are now contained rather than avoided:
-    /// [`moveListDir(_:)`] spends at most one ATC session per path and
-    /// [`maxMoveSessionsPerLaunch`] caps the whole app run, so the route cannot
-    /// loop no matter how often the view reappears. See that method for the
-    /// retry contract.
-    static func usesAirliftMove(_ path: String) -> Bool {
-        let normalized = normalizeDevicePath(path)
-        return airliftMoveRoots.contains { normalized == $0 || normalized.hasPrefix($0 + "/") }
     }
 
     // MARK: - App container paths
@@ -249,11 +199,7 @@ final class AirLiftBrowse {
 
     // MARK: - Listing
 
-    /// List a remote directory over AFC.
-    ///
-    /// Never starts an ATC session: a refresh reload, a scroll or a reappearance
-    /// of the same view all land here. Container directories go through the ATC
-    /// move instead, via `moveListDir(_:)`.
+    /// List a remote directory.
     ///
     /// - Throws: the FFI error string when the tunnel or the AFC listing
     ///   failed. Callers must surface it rather than fall back to
@@ -261,7 +207,6 @@ final class AirLiftBrowse {
     ///   all, so its failure (code 257) is meaningless and its "no permission"
     ///   copy actively misleads.
     func listDir(_ path: String) -> Result<[RemoteEntry], String> {
-        let api = "al_dir_list"
         let pairingPath = PairingController.pairingFilePath()
         let raw = queue.sync { () -> Result<String, String> in
             var outJSON: UnsafeMutablePointer<CChar>?
@@ -276,12 +221,12 @@ final class AirLiftBrowse {
             if let p = outJSON { al_string_free(p) }
             if let p = outError { al_string_free(p) }
             if rc != 0 {
-                let message = err ?? "\(api) returned \(rc) with no error string"
-                print("[airlift] \(api)(\(path)) failed rc=\(rc): \(message)")
+                let message = err ?? "al_dir_list returned \(rc) with no error string"
+                print("[airlift] al_dir_list(\(path)) failed rc=\(rc): \(message)")
                 return .failure(message)
             }
             guard let json else {
-                let message = "\(api)(\(path)) succeeded but returned no JSON"
+                let message = "al_dir_list(\(path)) succeeded but returned no JSON"
                 print("[airlift] \(message)")
                 return .failure(message)
             }
@@ -295,10 +240,10 @@ final class AirLiftBrowse {
         }
 
         guard let data = json.data(using: .utf8) else {
-            return .failure("\(api)(\(path)) returned text that is not valid UTF-8")
+            return .failure("al_dir_list(\(path)) returned text that is not valid UTF-8")
         }
         guard let entries = try? JSONDecoder().decode([RemoteEntry].self, from: data) else {
-            let message = "\(api)(\(path)) returned JSON that could not be decoded"
+            let message = "al_dir_list(\(path)) returned JSON that could not be decoded"
             print("[airlift] \(message)")
             return .failure(message)
         }
@@ -306,197 +251,6 @@ final class AirLiftBrowse {
         listingCache[path] = entries
         cacheLock.unlock()
         return .success(entries)
-    }
-
-    // MARK: - Loop-guarded ATC move
-
-    /// What `moveListDir(_:)` decided to do about one ATC-move attempt.
-    enum MoveOutcome {
-        /// A session ran (or had already run) and produced this listing.
-        case listed([RemoteEntry])
-        /// No session was started. `reason` is user-facing.
-        case refused(String)
-        /// No session was started because this path already had its one attempt
-        /// this launch; `cached` is whatever the first attempt produced.
-        case alreadyAttempted(Result<[RemoteEntry], String>)
-    }
-
-    /// ATC sessions started so far this launch, and the cap.
-    var moveSessionUsage: (used: Int, cap: Int) {
-        cacheLock.lock()
-        defer { cacheLock.unlock() }
-        return (moveSessionCount, Self.maxMoveSessionsPerLaunch)
-    }
-
-    /// List `path` through the Books ATC move, at most once per launch.
-    ///
-    /// The guard exists because the route is destructive on the device: it moves
-    /// the directory to `Airlock/Read/<token>` and back. On-device testing
-    /// showed (a) a navigation loop, because a restored row re-entered the view
-    /// and re-triggered a pull, and (b) one successful move per path only. So:
-    ///
-    /// * first visit spends one session, whatever the outcome — success caches
-    ///   the listing, failure caches the message;
-    /// * every later visit returns `.alreadyAttempted` with that cached result
-    ///   and starts no session, which is what makes the loop impossible;
-    /// * once `maxMoveSessionsPerLaunch` sessions are gone, every path is
-    ///   refused with a static message.
-    ///
-    /// Callers must offer `resetMoveAttempt(for:)` (a deliberate button press) as
-    /// the only way back in. Never call this from a refresh, a scroll or
-    /// `.onAppear` of a view that can reappear on its own.
-    func moveListDir(_ path: String) -> MoveOutcome {
-        // Booking the attempt and the session budget has to be atomic: two views
-        // appearing at once must not both start a session for one path.
-        cacheLock.lock()
-        let alreadyMoved = moveAttempted.contains(path)
-        let budgetLeft = moveSessionCount < Self.maxMoveSessionsPerLaunch
-        if !alreadyMoved && budgetLeft { moveAttempted.insert(path) }
-        if !alreadyMoved && budgetLeft { moveSessionCount += 1 }
-        let cached = listingCache[path]
-        let priorFailure = moveFailures[path]
-        cacheLock.unlock()
-
-        if alreadyMoved {
-            print("[airlift] ATC read of \(path) already used its one attempt this launch; serving the cached result (session \(Self.maxMoveSessionsPerLaunch) total)")
-            if let cached { return .alreadyAttempted(.success(cached)) }
-            let prior = priorFailure ?? Self.alreadyAttemptedMessage(path)
-            return .alreadyAttempted(.failure(prior))
-        }
-        guard budgetLeft else {
-            return .refused(Self.budgetExhaustedMessage)
-        }
-
-        print("[airlift] ATC read of \(path) starting session (attempt 1 of 1)")
-        let result = listDirViaAirliftMove(path)
-        switch result {
-        case .success(let entries):
-            cacheLock.lock()
-            moveFailures[path] = nil
-            cacheLock.unlock()
-            return .listed(entries)
-        case .failure(let message):
-            // Remember the failure so a reappearance repeats the message instead
-            // of starting another session.
-            cacheLock.lock()
-            moveFailures[path] = message
-            cacheLock.unlock()
-            return .alreadyAttempted(.failure(message))
-        }
-    }
-
-    /// Give `path` its one ATC attempt back, so the next `moveListDir(_:)` may
-    /// start a session. Only ever called from an explicit user action — the
-    /// budget still applies, so this cannot become a loop either.
-    func resetMoveAttempt(for path: String) {
-        cacheLock.lock()
-        moveAttempted.remove(path)
-        moveFailures.removeValue(forKey: path)
-        cacheLock.unlock()
-        print("[airlift] ATC read of \(path) was re-armed for one more attempt")
-    }
-
-    /// Message for a path that already spent its attempt and has no cached
-    /// listing to show.
-    private static func alreadyAttemptedMessage(_ path: String) -> String {
-        "This directory was already read once with the AirTraffic sync this session, and that attempt did not produce a listing. Reading it again means moving the directory out to \(AirLiftBrowse.airlockReadDir) and back, which is not repeated automatically.\n\nTap \"Retry AirTraffic read\" to try it once more on purpose, or use Settings → Recover staged copies if a directory is stuck there."
-    }
-
-    /// Message once the per-launch session cap is spent.
-    private static var budgetExhaustedMessage: String {
-        let cap = Self.maxMoveSessionsPerLaunch
-        return "This session already used its \(cap) AirTraffic reads. Each one moves a real directory out to \(Self.airlockReadDir) and back, so no more start automatically.\n\nRelaunch Filos to get another \(cap), or use Settings → Recover staged copies if a directory was left there."
-    }
-
-    private static let airlockReadDir = "Airlock/Read"
-
-    /// The actual FFI call. Blockingly moves the directory; callers run it off
-    /// the main thread and have already booked the attempt.
-    private func listDirViaAirliftMove(_ path: String) -> Result<[RemoteEntry], String> {
-        let pairingPath = PairingController.pairingFilePath()
-        let raw = queue.sync { () -> Result<String, String> in
-            var outJSON: UnsafeMutablePointer<CChar>?
-            var outError: UnsafeMutablePointer<CChar>?
-            let rc = pairingPath.withCString { pairC in
-                path.withCString { pathC in
-                    al_airlift_list_dir(pairC, pathC, airLiftLogCallback, nil, &outJSON, &outError)
-                }
-            }
-            let json = outJSON.flatMap { String(validatingUTF8: $0) }
-            let err = outError.flatMap { String(validatingUTF8: $0) }
-            if let p = outJSON { al_string_free(p) }
-            if let p = outError { al_string_free(p) }
-            if rc != 0 {
-                let message = err ?? "al_airlift_list_dir returned \(rc) with no error string"
-                print("[airlift] al_airlift_list_dir(\(path)) failed rc=\(rc): \(message)")
-                return .failure(message)
-            }
-            guard let json else {
-                let message = "al_airlift_list_dir(\(path)) succeeded but returned no JSON"
-                print("[airlift] \(message)")
-                return .failure(message)
-            }
-            return .success(json)
-        }
-
-        let json: String
-        switch raw {
-        case .success(let value): json = value
-        case .failure(let message): return .failure(message)
-        }
-        guard let data = json.data(using: .utf8) else {
-            return .failure("al_airlift_list_dir(\(path)) returned text that is not valid UTF-8")
-        }
-        guard let entries = try? JSONDecoder().decode([RemoteEntry].self, from: data) else {
-            let message = "al_airlift_list_dir(\(path)) returned JSON that could not be decoded"
-            print("[airlift] \(message)")
-            return .failure(message)
-        }
-        cacheLock.lock()
-        listingCache[path] = entries
-        cacheLock.unlock()
-        return .success(entries)
-    }
-
-    /// Finish every pull that is still parked in `Airlock/Read` — the recovery
-    /// half of the ATC move (`al_airlift_recover`).
-    ///
-    /// The ATC move is armed again but strictly capped (`moveListDir(_:)`), so a
-    /// stranded copy is possible in principle: a pull that failed after moving
-    /// the directory reports
-    /// `kept at Airlock/Read/<token>; retry or call al_airlift_recover`, and
-    /// calling this replays the restore step for each such record.
-    ///
-    /// Returns the raw JSON array of per-path results
-    /// (`[{"target":…,"token":…,"status":"restored"|"failed"|"missing"…, …}]`)
-    /// so the UI can show exactly what happened; decoding is the caller's job.
-    ///
-    /// BLOCKS for several seconds per parked directory. Never call it on
-    /// launch — only from an explicit user action.
-    func recoverStaging() -> Result<String, String> {
-        let pairingPath = PairingController.pairingFilePath()
-        return queue.sync { () -> Result<String, String> in
-            var outJSON: UnsafeMutablePointer<CChar>?
-            var outError: UnsafeMutablePointer<CChar>?
-            let rc = pairingPath.withCString { pairC in
-                al_airlift_recover(pairC, airLiftLogCallback, nil, &outJSON, &outError)
-            }
-            let json = outJSON.flatMap { String(validatingUTF8: $0) }
-            let err = outError.flatMap { String(validatingUTF8: $0) }
-            if let p = outJSON { al_string_free(p) }
-            if let p = outError { al_string_free(p) }
-            if rc != 0 {
-                let message = err ?? "al_airlift_recover returned \(rc) with no error string"
-                print("[airlift] al_airlift_recover failed rc=\(rc): \(message)")
-                return .failure(message)
-            }
-            guard let json else {
-                let message = "al_airlift_recover succeeded but returned no JSON"
-                print("[airlift] \(message)")
-                return .failure(message)
-            }
-            return .success(json)
-        }
     }
 
     /// Cached listing for `path`, if a successful fetch happened earlier.
