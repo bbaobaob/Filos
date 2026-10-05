@@ -68,7 +68,14 @@ struct FileBrowserView: View {
     @State private var showLogs = false
     @State private var showSettings = false
     @State private var showFileImporter = false
-    
+
+    /// The Retry button belongs to the ATC-move route only; every other route's
+    /// errors have nothing to retry.
+    private var canRetryAirliftMove: Bool {
+        let path = item.fileURL.path
+        return !AirLiftBrowse.isAppContainerRoot(path) && AirLiftBrowse.usesAirliftMove(path)
+    }
+
     var body: some View {
         Group {
             if currentState == .loading {
@@ -103,6 +110,16 @@ struct FileBrowserView: View {
                                 .multilineTextAlignment(.center)
                                 .foregroundStyle(.secondary)
                                 .font(.footnote)
+                        }
+                    }
+                    // Only on the ATC-move routes: an explicit way to spend
+                    // another AirTraffic session after the per-launch guard has
+                    // refused or spent this path's one attempt.
+                    if canRetryAirliftMove {
+                        Button {
+                            retryAirliftMove()
+                        } label: {
+                            ButtonLabel("Retry AirTraffic read", symbol: "arrow.clockwise")
                         }
                     }
                 }
@@ -327,8 +344,9 @@ struct FileBrowserView: View {
             dirFiles = sortFiles(files: dirFiles)
         }
         .onChange(of: mgr.refreshFiles) { _ in
-            // Pull-to-refresh re-runs the same AFC / InstallationProxy /
-            // house_arrest listing as a navigation. No ATC sync either way.
+            // Pull-to-refresh must never start an AirTraffic session, so the ATC
+            // branch is disarmed here: the cached listing is served, or the AFC /
+            // house_arrest route runs.
             DispatchQueue.global(qos: .userInitiated).async {
                 loadDirFiles(allowAirliftMove: false)
             }
@@ -336,9 +354,11 @@ struct FileBrowserView: View {
     }
     
     // MARK: handle files
-    /// `allowAirliftMove` is accepted and ignored: the ATC move is disabled
-    /// (`AirLiftBrowse.usesAirliftMove(_:)` is always `false`), so a reload and a
-    /// fresh navigation take the same AFC/InstallationProxy route.
+    /// `allowAirliftMove` is false for a pull-to-refresh: a refresh re-lists over
+    /// AFC / InstallationProxy / house_arrest and never starts an AirTraffic
+    /// session. A fresh navigation sets it, and even then
+    /// `AirLiftBrowse.moveListDir(_:)` allows only one ATC session per path per
+    /// launch.
     private func loadDirFiles(allowAirliftMove: Bool = true) {
         let path = item.fileURL.path
 
@@ -362,12 +382,14 @@ struct FileBrowserView: View {
     ///     `com.apple.mobile.house_arrest` (`al_house_list`) vends the
     ///     container as its own AFC channel, which is the only thing that can
     ///     open it.
-    ///   * everything else (`/var/mobile/Library/…`, AppGroup, `/var/tmp`) —
-    ///     plain AFC (`al_dir_list`), as before.
-    ///
-    /// The Books ATC move (`al_airlift_list_dir`) is not reachable from here
-    /// at all: `usesAirliftMove(_:)` is `false` for every path, and `allowAirliftMove`
-    /// no longer arms anything.
+    ///   * an app container / AppGroup / `/var/mobile/Applications` directory —
+    ///     the Books ATC move (`al_airlift_list_dir`). It moves the directory
+    ///     out to `Airlock/Read/<token>` and back, and
+    ///     `AirLiftBrowse.moveListDir` allows exactly one session per path per
+    ///     launch, so a reappearing view cannot loop. `allowAirliftMove == false`
+    ///     (pull-to-refresh) serves the cached listing and starts nothing.
+    ///   * everything else (`/var/mobile/Library/…`, `/var/tmp`) — plain AFC
+    ///     (`al_dir_list`), as before.
     private func loadRemoteDirFiles(path: String, allowAirliftMove: Bool) {
         if AirLiftBrowse.isAppContainerRoot(path) {
             loadAppContainerRoot(path: path)
@@ -394,7 +416,76 @@ struct FileBrowserView: View {
             currentState = .unknownError
             return
         }
+        if AirLiftBrowse.usesAirliftMove(path) {
+            if allowAirliftMove {
+                loadAirliftMoveDirectory(path: path)
+            } else {
+                serveCachedMoveListing(path: path)
+            }
+            return
+        }
         loadAFCDirectory(path: path)
+    }
+
+    /// A pull-to-refresh of an ATC-move path: no session is started, the cached
+    /// listing is served when there is one, and otherwise the cached failure (or
+    /// a plain explanation) is shown with the Retry button.
+    private func serveCachedMoveListing(path: String) {
+        if let cached = AirLiftBrowse.shared.cachedListing(for: path) {
+            print("[airlift] refresh of \(path) served from the cached listing (no ATC session)")
+            applyRemoteListing(cached)
+            return
+        }
+        let message = "Pull-to-refresh does not re-read \(path): reading it means moving the directory out to Airlock/Read and back with the AirTraffic sync. Use \"Retry AirTraffic read\" if you want another attempt on purpose."
+        print("[!] \(message)")
+        localizedError = message
+        currentState = .unknownError
+    }
+
+    /// An app container, App Group or `/var/mobile/Applications` directory via
+    /// the Books ATC move.
+    ///
+    /// Every outcome is funneled through `handleMoveOutcome(_:path:)`, which never
+    /// starts a second session for the same path — see
+    /// `AirLiftBrowse.moveListDir(_:)`.
+    private func loadAirliftMoveDirectory(path: String) {
+        print("[airlift] listing \(path) through al_airlift_list_dir (Books ATC move)")
+        handleMoveOutcome(AirLiftBrowse.shared.moveListDir(path), path: path)
+    }
+
+    /// Apply whatever the loop-guarded ATC move decided. A refusal or an
+    /// already-spent attempt becomes the error state with the Retry button, so
+    /// trying again is always a deliberate tap.
+    private func handleMoveOutcome(_ outcome: AirLiftBrowse.MoveOutcome, path: String) {
+        switch outcome {
+        case .listed(let entries):
+            applyRemoteListing(entries)
+        case .alreadyAttempted(let result):
+            switch result {
+            case .success(let entries):
+                print("[airlift] serving the cached listing for \(path) (no new ATC session)")
+                applyRemoteListing(entries)
+            case .failure(let message):
+                print("[!] ATC read of \(path) is not retried automatically: \(message)")
+                localizedError = message
+                currentState = .unknownError
+            }
+        case .refused(let message):
+            print("[!] ATC read of \(path) refused: \(message)")
+            localizedError = message
+            currentState = .unknownError
+        }
+    }
+
+    /// Deliberate retry: re-arm this one path and spend one session on it. Never
+    /// called automatically.
+    private func retryAirliftMove() {
+        let path = item.fileURL.path
+        AirLiftBrowse.shared.resetMoveAttempt(for: path)
+        currentState = .loading
+        DispatchQueue.global(qos: .userInitiated).async {
+            loadAirliftMoveDirectory(path: path)
+        }
     }
 
     /// `/var/mobile/Containers/Data/Application` — one row per installed app,

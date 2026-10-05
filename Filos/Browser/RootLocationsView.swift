@@ -10,7 +10,8 @@
 //  `AirLiftModel.defaultTargets` entry and nothing else — no listing, no
 //  AirLiftModel observation, no ATC trigger — so it cannot re-enter a listing
 //  while a pushed screen is still working. The enumeration happens once, inside
-//  the pushed `FileBrowserView` (AFC / InstallationProxy / house_arrest).
+//  the pushed `FileBrowserView` (AFC / InstallationProxy / house_arrest / the
+//  loop-guarded ATC move).
 //
 
 import SwiftUI

@@ -79,7 +79,7 @@ use crate::browse::{
     base64_decode, base64_encode, finish_string_result, list_dir_json, lock_tunnel,
 };
 use crate::exploit::{
-    atc_message_name, build_books_plist, connect_tunnel, make_atc_msg, random_hex, read_atc_dict,
+    atc_message_name, connect_tunnel, make_atc_msg, random_hex, read_atc_dict,
     send_atc_dict, AppDeviceTunnel, Logger, ALLogCallback, LINK_PREFIX,
 };
 use crate::ffi_util::{opt_str, run_with_large_stack};
@@ -115,6 +115,11 @@ const SYNC_STATE_FILES: &[&str] = &[
 
 /// Largest sync-metadata file that is snapshotted (16 MiB).
 const MAX_BACKUP_BYTES: usize = 16 * 1024 * 1024;
+/// Catalog rows the pull manifest may carry alongside the requested one.
+/// The reference allows 127 preserved rows next to at most 128 manifest
+/// entries: acl/crates/core/src/books.rs:137 and
+/// acl/crates/airtraffic/src/handshake.rs:238.
+const MAX_PRESERVED_ROWS: usize = 127;
 /// Pause between two `FileComplete` messages inside one session. Order matters
 /// (symlink first, directory second), so the daemon must have finished the
 /// first move before the second is announced.
@@ -351,6 +356,28 @@ impl BooksSyncBackup {
         }
     }
 
+    /// The snapshotted `Books/Sync/Books.plist` bytes, if the capture kept them.
+    fn books_plist_bytes(&self) -> Option<Vec<u8>> {
+        self.entries.iter().find_map(|(path, state)| {
+            if path != BOOKS_PLIST {
+                return None;
+            }
+            match state {
+                BackupState::Present { data_b64 } => base64_decode(data_b64).ok(),
+                BackupState::Absent | BackupState::Untouched => None,
+            }
+        })
+    }
+
+    /// Catalog rows to re-emit in the pull manifest, so the request keeps the
+    /// device's own catalog intact instead of replacing it.
+    ///
+    /// See [`preserved_rows`] for the derivation from the AirCard reference.
+    fn preserved_manifest_rows(&self, identifiers: &[String]) -> Result<Vec<plist::Value>, String> {
+        let bytes = self.books_plist_bytes();
+        preserved_rows(bytes.as_deref(), identifiers).map(|(rows, _)| rows)
+    }
+
     /// Persist the snapshot next to the app in its container temp directory so
     /// a crash mid-sequence still leaves the original manifest on disk.
     fn save_to_temp(&self) -> std::io::Result<std::path::PathBuf> {
@@ -556,18 +583,127 @@ async fn stage_restore_symlink(
     Ok(())
 }
 
-/// Write `Books.plist` with one manifest row per identifier. Identifiers are
-/// the `Persistent ID` values; `Item ID`/`DSID` follow the write path's shape.
+/// Pure core of the pull manifest: the rows that go into `Books/Sync/Books.plist`
+/// for a pull/restore run.
+///
+/// Derived from the verified AirCard reference (hoicau/AirCard-Linux, working on
+/// iOS 27); each key cites where it comes from:
+///
+/// * `Persistent ID` — the asset id we want moved.
+///   acl/crates/core/src/books.rs:74 (`synthetic_books_plist`), replaced with the
+///   real asset id at acl/crates/core/src/staging.rs:42-45 and re-emitted per
+///   transfer at acl/crates/core/src/customization.rs:198.
+/// * `Item ID` — string, 1-based index of the row inside the request.
+///   acl/crates/core/src/books.rs:75 (single asset) and
+///   acl/crates/core/src/customization.rs:199 (`n + 1` for each transfer row).
+/// * `DSID` — always `"1"`. acl/crates/core/src/books.rs:76,
+///   acl/crates/core/src/customization.rs:200.
+///
+/// Rows we did *not* ask for are the "preserved" catalog rows: the reference
+/// copies every existing row verbatim and appends the requested one at the end
+/// (acl/crates/core/src/books.rs:107-127 and :149-150), and the device then
+/// reports them back with `IsDownload=false`
+/// (acl/crates/airtraffic/src/lib.rs:169-171,
+/// acl/crates/airtraffic/src/handshake.rs:774). Their persistent ids are the
+/// `retained_ids` of the session
+/// (acl/crates/core/src/books.rs:140,
+/// acl/crates/airtraffic/src/handshake.rs:227).
+///
+/// Our previous manifest replaced the whole file with just the requested rows,
+/// so the device's own catalog rows vanished from the request; the first sync
+/// consumed the Books asset state and later ones were answered with
+/// `ObjectNotFound`.
+fn build_pull_manifest(identifiers: &[String], preserved: &[plist::Value]) -> Result<Vec<u8>, String> {
+    let mut rows: Vec<plist::Value> = preserved.to_vec();
+    if rows.len() > MAX_PRESERVED_ROWS {
+        return Err(format!(
+            "Books.plist would carry {} preserved rows (limit {MAX_PRESERVED_ROWS})",
+            rows.len()
+        ));
+    }
+    for (index, id) in identifiers.iter().enumerate() {
+        let mut row = plist::Dictionary::new();
+        row.insert("Persistent ID".to_owned(), plist::Value::String(id.clone()));
+        row.insert(
+            "Item ID".to_owned(),
+            plist::Value::String((index + 1).to_string()),
+        );
+        row.insert("DSID".to_owned(), plist::Value::String("1".to_owned()));
+        rows.push(plist::Value::Dictionary(row));
+    }
+    let mut top = plist::Dictionary::new();
+    top.insert("Books".to_owned(), plist::Value::Array(rows));
+    let mut buf = Vec::new();
+    plist::to_writer_binary(&mut buf, &plist::Value::Dictionary(top))
+        .map_err(|e| format!("encode pull manifest: {e}"))?;
+    Ok(buf)
+}
+
+/// Pull the catalog rows out of a snapshotted `Books/Sync/Books.plist` so they
+/// can be re-emitted verbatim alongside the requested asset.
+///
+/// Mirrors acl/crates/core/src/books.rs:97-127: the array under the `Books` key
+/// of every snapshotted catalog plist is kept row-for-row, minus any row whose
+/// `Persistent ID` is one of the ids this run is requesting (the reference
+/// treats that as a conflict, acl/crates/core/src/books.rs:123-125 — we drop the
+/// stale row instead, since the requested row is appended fresh anyway).
+///
+/// Returns the rows and their persistent ids (`retained_ids` in the reference).
+fn preserved_rows(
+    snapshot_books_plist: Option<&[u8]>,
+    identifiers: &[String],
+) -> Result<(Vec<plist::Value>, Vec<String>), String> {
+    let Some(bytes) = snapshot_books_plist else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let value = plist::from_bytes::<plist::Value>(bytes)
+        .map_err(|e| format!("snapshot Books.plist does not parse: {e}"))?;
+    let Some(rows) = value
+        .as_dictionary()
+        .and_then(|d| d.get("Books"))
+        .and_then(plist::Value::as_array)
+    else {
+        // An empty/absent Books array is the normal state; nothing to preserve.
+        return Ok((Vec::new(), Vec::new()));
+    };
+
+    let mut kept: Vec<plist::Value> = Vec::new();
+    let mut ids: Vec<String> = Vec::new();
+    for row in rows {
+        let Some(id) = row
+            .as_dictionary()
+            .and_then(|d| d.get("Persistent ID"))
+            .and_then(plist::Value::as_string)
+        else {
+            // acl/crates/core/src/books.rs:109-112 refuses a row without a
+            // persistent id. Refusing the whole run here would strand the pull,
+            // so the malformed row is dropped and reported by its absence.
+            continue;
+        };
+        if identifiers.iter().any(|want| want == id) || ids.iter().any(|seen| seen == id) {
+            continue;
+        }
+        if ids.len() >= MAX_PRESERVED_ROWS {
+            break;
+        }
+        ids.push(id.to_owned());
+        kept.push(row.clone());
+    }
+    Ok((kept, ids))
+}
+
+/// Write the pull/restore manifest: every preserved catalog row from the
+/// snapshot, then one requested row per identifier.
 async fn write_books_plist(
     afc: &mut AfcClient,
     identifiers: &[String],
+    preserved: &[plist::Value],
     logger: &Logger,
 ) -> Result<(), String> {
     for dir in ["Airlock", "Airlock/Book", AIRLOCK_READ, "Books", "Books/Sync"] {
         let _ = afc.mk_dir(dir).await;
     }
-    let plist_bytes =
-        build_books_plist(identifiers).map_err(|e| format!("build_books_plist: {e}"))?;
+    let plist_bytes = build_pull_manifest(identifiers, preserved)?;
     let mut fd = afc
         .open(BOOKS_PLIST, AfcFopenMode::WrOnly)
         .await
@@ -1076,7 +1212,30 @@ async fn pull_list_and_restore(
     // *after* a restore attempt.
     ensure_read_dir(&mut afc, logger).await;
 
-    if let Err(e) = write_books_plist(&mut afc, std::slice::from_ref(&asset_id_pull), logger).await {
+    // The manifest keeps every catalog row the snapshot captured, so the
+    // request looks like "download this one asset" instead of "replace the
+    // whole catalog" — that difference is what made the Books asset state
+    // one-shot.
+    let preserved_pull = match backup.preserved_manifest_rows(std::slice::from_ref(&asset_id_pull)) {
+        Ok(rows) => rows,
+        Err(e) => {
+            let _ = afc.remove_all(pull_dir.clone()).await;
+            let _ = backup.restore(&mut afc, logger).await;
+            return Err(format!("STEP B manifest failed: {e}"));
+        }
+    };
+    logger.log(format!(
+        "airlift: STEP B manifest carries {} preserved catalog row(s) plus 1 requested row",
+        preserved_pull.len()
+    ));
+    if let Err(e) = write_books_plist(
+        &mut afc,
+        std::slice::from_ref(&asset_id_pull),
+        &preserved_pull,
+        logger,
+    )
+    .await
+    {
         // The manifest never landed, so the daemon has nothing to act on and
         // nothing was moved. This is the one safe early exit in STEP B.
         let _ = afc.remove_all(pull_dir.clone()).await;
@@ -1163,10 +1322,22 @@ async fn pull_list_and_restore(
     // the only thing that can put a moved directory back, so "attempt the
     // restore and find it unnecessary" always beats "skip it and hope nothing
     // moved".
+    // Same manifest shape as STEP B: the catalog rows the snapshot captured plus
+    // the two restore rows. The sync state was restored just above, so these
+    // rows describe exactly what the device had before this run started.
+    let preserved_c = backup
+        .preserved_manifest_rows(&[asset_id_link.clone(), asset_id_read.clone()])
+        .unwrap_or_else(|e| {
+            logger.log(format!(
+                "airlift: warning: no preserved catalog rows for the STEP C manifest ({e})"
+            ));
+            Vec::new()
+        });
     let step_c_result = async {
         write_books_plist(
             &mut afc,
             &[asset_id_link.clone(), asset_id_read.clone()],
+            &preserved_c,
             logger,
         )
         .await?;
@@ -1276,6 +1447,7 @@ async fn restore_record(
     tunnel: &mut AppDeviceTunnel,
     afc: &mut AfcClient,
     record: &RecoveryRecord,
+    backup: &BooksSyncBackup,
     logger: &Logger,
 ) -> serde_json::Value {
     let mut result = serde_json::json!({ "target": record.target, "token": record.token });
@@ -1301,6 +1473,14 @@ async fn restore_record(
     let asset_id_link = media_asset_id(&format!("{pull_dir}/{LINK_ENTRY}"));
     let asset_id_read = media_asset_id(&parked);
 
+    let preserved = backup
+        .preserved_manifest_rows(&[asset_id_link.clone(), asset_id_read.clone()])
+        .unwrap_or_else(|e| {
+            logger.log(format!(
+                "airlift: warning: no preserved catalog rows for the recover manifest ({e})"
+            ));
+            Vec::new()
+        });
     let outcome = async {
         stage_restore_symlink(
             tunnel,
@@ -1310,7 +1490,13 @@ async fn restore_record(
             logger,
         )
         .await?;
-        write_books_plist(afc, &[asset_id_link.clone(), asset_id_read.clone()], logger).await?;
+        write_books_plist(
+            afc,
+            &[asset_id_link.clone(), asset_id_read.clone()],
+            &preserved,
+            logger,
+        )
+        .await?;
         atc_asset_sync(
             tunnel,
             &[asset_id_link, asset_id_read],
@@ -1386,7 +1572,7 @@ async fn recover_read_dirs(pairing_path: &str, logger: &Logger) -> Result<String
                 continue;
             }
         };
-        let result = restore_record(&mut tunnel, &mut afc, &record, logger).await;
+        let result = restore_record(&mut tunnel, &mut afc, &record, &backup, logger).await;
         let _ = backup.restore(&mut afc, logger).await;
         results.push(result);
     }
@@ -1491,8 +1677,9 @@ pub unsafe fn recover(
 #[cfg(test)]
 mod tests {
     use super::{
-        asset_id_for_device_path, checked_pull_path, link_target_for_parent,
-        media_asset_id, parent_and_basename, BackupState, BooksSyncBackup, RecoveryRecord,
+        asset_id_for_device_path, build_pull_manifest, checked_pull_path,
+        link_target_for_parent, media_asset_id, parent_and_basename, preserved_rows,
+        BackupState, BooksSyncBackup, RecoveryRecord,
     };
 
     const UUID_DIR: &str = "/var/mobile/Containers/Data/Application/DEADBEEF-0000-0000-0000-000000000000/Documents";
@@ -1614,6 +1801,156 @@ mod tests {
         let parsed: BooksSyncBackup = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(parsed.token, backup.token);
         assert_eq!(parsed.entries, backup.entries);
+    }
+
+    /// A stand-in for the device's own catalog rows. Key set and value types
+    /// follow a real Books.plist row as the AirCard reference expects it
+    /// (acl/crates/core/src/books.rs:107-127 keeps every row verbatim, and its
+    /// own test fixture at acl/crates/core/src/books.rs:211-215 shows the keys a
+    /// row carries: `Persistent ID`, `Path`, `Name`).
+    fn catalog_row(id: &str, path: &str, name: &str) -> plist::Value {
+        let mut row = plist::Dictionary::new();
+        row.insert(
+            "Persistent ID".to_owned(),
+            plist::Value::String(id.to_owned()),
+        );
+        row.insert("Path".to_owned(), plist::Value::String(path.to_owned()));
+        row.insert("Name".to_owned(), plist::Value::String(name.to_owned()));
+        plist::Value::Dictionary(row)
+    }
+
+    fn catalog_plist(rows: Vec<plist::Value>) -> Vec<u8> {
+        let mut top = plist::Dictionary::new();
+        top.insert("Books".to_owned(), plist::Value::Array(rows));
+        let mut buf = Vec::new();
+        plist::to_writer_binary(&mut buf, &plist::Value::Dictionary(top)).unwrap();
+        buf
+    }
+
+    #[test]
+    fn pull_manifest_marks_the_asset_requested_and_keeps_catalog_rows() {
+        // Every key/value below is pinned against the verified AirCard
+        // reference, not invented:
+        //   Persistent ID  acl/crates/core/src/books.rs:74
+        //   Item ID        acl/crates/core/src/books.rs:75 ("1") and
+        //                  acl/crates/core/src/customization.rs:199 (`n + 1`)
+        //   DSID           acl/crates/core/src/books.rs:76 ("1") and
+        //                  acl/crates/core/src/customization.rs:200
+        //   preserved rows verbatim, requested row appended last
+        //                  acl/crates/core/src/books.rs:149-150
+        //   preserved rows come back as IsDownload=false
+        //                  acl/crates/airtraffic/src/lib.rs:169-171
+        let preserved = vec![
+            catalog_row("existing-id-1", "Purchases/one.epub", "One"),
+            catalog_row("existing-id-2", "Purchases/two.epub", "Two"),
+        ];
+        let requested = vec!["../../../Containers/Data/Application/DEADBEEF/Documents".to_owned()];
+
+        let bytes = build_pull_manifest(&requested, &preserved).unwrap();
+        assert_eq!(&bytes[..8], b"bplist00", "manifest must stay a binary plist");
+
+        let decoded = plist::from_bytes::<plist::Value>(&bytes).unwrap();
+        let rows = decoded
+            .as_dictionary()
+            .unwrap()
+            .get("Books")
+            .and_then(plist::Value::as_array)
+            .unwrap()
+            .clone();
+
+        // 2 preserved + 1 requested.
+        assert_eq!(rows.len(), 3);
+        // Preserved rows are re-emitted byte-identical, in order, before ours.
+        assert_eq!(rows[0], preserved[0]);
+        assert_eq!(rows[1], preserved[1]);
+
+        let requested_row = rows[2].as_dictionary().unwrap();
+        assert_eq!(
+            requested_row.get("Persistent ID").and_then(plist::Value::as_string),
+            Some(requested[0].as_str())
+        );
+        assert_eq!(
+            requested_row.get("Item ID").and_then(plist::Value::as_string),
+            Some("1")
+        );
+        assert_eq!(
+            requested_row.get("DSID").and_then(plist::Value::as_string),
+            Some("1")
+        );
+
+        // Two requested rows (the STEP C restore) number 1 and 2, DSID "1" both
+        // times — acl/crates/core/src/customization.rs:198-200.
+        let two = build_pull_manifest(
+            &["../../airlift-pull-abc/p0/p1/p2/link".to_owned(), "../../Airlock/Read/abc".to_owned()],
+            &[],
+        )
+        .unwrap();
+        let two_rows = plist::from_bytes::<plist::Value>(&two)
+            .unwrap()
+            .as_dictionary()
+            .unwrap()["Books"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(two_rows.len(), 2);
+        let ids: Vec<&str> = two_rows
+            .iter()
+            .map(|r| {
+                r.as_dictionary()
+                    .unwrap()
+                    .get("Item ID")
+                    .and_then(plist::Value::as_string)
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(ids, vec!["1", "2"]);
+        for row in &two_rows {
+            assert_eq!(
+                row.as_dictionary()
+                    .unwrap()
+                    .get("DSID")
+                    .and_then(plist::Value::as_string),
+                Some("1")
+            );
+        }
+    }
+
+    #[test]
+    fn preserved_rows_are_read_from_the_snapshot_and_deduped() {
+        let snapshot = catalog_plist(vec![
+            catalog_row("keep-1", "Purchases/one.epub", "One"),
+            // A stale row for the very asset this run requests: dropped, because
+            // the requested row is appended fresh (acl/crates/core/src/books.rs:123-125).
+            catalog_row("../../../Containers/Data/Application/DEADBEEF/Documents", "x", "x"),
+            catalog_row("keep-1", "Purchases/dupe.epub", "Dupe"),
+            catalog_row("keep-2", "Purchases/two.epub", "Two"),
+            // No Persistent ID: skipped (acl/crates/core/src/books.rs:109-112).
+            plist::Value::Dictionary({
+                let mut d = plist::Dictionary::new();
+                d.insert("Name".to_owned(), plist::Value::String("orphan".into()));
+                d
+            }),
+        ]);
+        let requested = vec!["../../../Containers/Data/Application/DEADBEEF/Documents".to_owned()];
+        let (rows, ids) = preserved_rows(Some(&snapshot), &requested).unwrap();
+        assert_eq!(ids, vec!["keep-1".to_owned(), "keep-2".to_owned()]);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0]
+                .as_dictionary()
+                .unwrap()
+                .get("Persistent ID")
+                .and_then(plist::Value::as_string),
+            Some("keep-1")
+        );
+
+        // No snapshot (Books never created one) is not an error: nothing to
+        // preserve, so the request carries only the requested row.
+        let (rows, ids) = preserved_rows(None, &requested).unwrap();
+        assert!(rows.is_empty() && ids.is_empty());
+        // An empty Books array likewise.
+        let (rows, ids) = preserved_rows(Some(&catalog_plist(vec![])), &requested).unwrap();
+        assert!(rows.is_empty() && ids.is_empty());
     }
 
     #[test]

@@ -29,11 +29,11 @@ struct SettingsView: View {
     /// Ask the Rust side (`al_airlift_recover`) to finish every directory that a
     /// previous `al_airlift_list_dir` left parked in `Airlock/Read`.
     ///
-    /// This reports; it never lists. The browse path no longer arms the ATC
-    /// move (`AirLiftBrowse.usesAirliftMove(_:)` is always `false`), so this is
-    /// purely a cleanup/report action for a directory that an earlier diagnostic
-    /// run may have parked there. Off the main thread: each record replays an
-    /// AirTraffic sync, so this blocks for seconds. The JSON comes back as
+    /// This reports; it never lists. Browsing arms the ATC move again
+    /// (`AirLiftBrowse.moveListDir(_:)`), but only under the per-path /
+    /// per-launch cap, so a stranded copy is the tail case this button exists
+    /// for. Off the main thread: each record replays an AirTraffic sync, so this
+    /// blocks for seconds. The JSON comes back as
     /// `[{"target":…,"token":…,"status":…}, …]` and is summarised here rather
     /// than swallowed — "0 restored" is the answer people actually need.
     private func recoverStagedCopies() {
@@ -165,13 +165,15 @@ struct SettingsView: View {
                         ButtonLabel("Airlift", symbol: "airplane")
                     }
 
-                    // Browsing no longer uses the Books AirTraffic
-                    // sync (it is disabled: the Books asset state turned out to
-                    // be one-shot). This button stays as a report/cleanup action
-                    // for a directory an earlier diagnostic run left parked in
-                    // Airlock/Read with a recovery record beside it. It never
-                    // lists anything itself, and never runs automatically: only
-                    // when tapped here.
+                    // Browsing an app container / AppGroup / Applications
+                    // directory uses the Books AirTraffic sync (pull the
+                    // directory to Airlock/Read, list it, push it back), capped
+                    // at one session per path and three per launch. If such a
+                    // sequence is interrupted — app killed, device asleep,
+                    // connection dropped — the directory is still parked in
+                    // Airlock/Read with a recovery record beside it, and this
+                    // button finishes the job. It never lists anything itself,
+                    // and never runs automatically: only when tapped here.
                     Button {
                         recoverStagedCopies()
                     } label: {
@@ -190,7 +192,7 @@ struct SettingsView: View {
                 } header: {
                     HeaderLabel("Airlift", symbol: "airplane")
                 } footer: {
-                    Text("Airlift runs automatically on launch using the stored pairing file. Pairing only happens when you tap Pair here. \"Recover staged copies\" only reports on directories left staged by an earlier diagnostic run — the per-path details it prints are the safest thing to send in a bug report.")
+                    Text("Airlift runs automatically on launch using the stored pairing file. Pairing only happens when you tap Pair here. \"Recover staged copies\" only matters if an AirTraffic directory listing was interrupted — the per-path details it prints are the safest thing to send in a bug report.")
                 }
 
                 Section {
