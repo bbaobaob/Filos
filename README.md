@@ -19,7 +19,7 @@
 This fork integrates the **Airlift** capability from [Mak5er/AirCard-iOS](https://github.com/Mak5er/AirCard-iOS): the Rust `airlift_ffi` core plus the Swift pairing/VPN helpers.
 
 - `rust-core/` — vendored Rust FFI crate (RPPairing host, AirTraffic exploit, syslog stream, Grappa token helper).
-- `AirliftFFI.xcframework` — prebuilt arm64 (device + simulator) static library wrapper. CI rebuilds it from `rust-core/`.
+- `AirliftFFI.xcframework` — prebuilt arm64 (device + simulator) static library wrapper. CI rebuilds it from `rust-core/` on every push, and the copy checked into git can lag behind `rust-core/` — if a local `xcodebuild` fails to link `al_*` symbols that are present in `rust-core/include/airlift.h`, run `./build-ios.sh` first to repackage it.
 - `Filos/Airlift/` — Swift side: `AirLiftModel.swift` (FFI bridge + launch bootstrap), `AirLiftView.swift` (panel UI), `PairingController.swift`, `FilosNotifications.swift` (pairing PIN notification), `NetworkStatus.swift`, `Utilities.swift`, `GrappaHelper.m`.
 - `build-ios.sh` — builds the Rust core for `aarch64-apple-ios` / `aarch64-apple-ios-sim` and repackages `AirliftFFI.xcframework`.
 
@@ -45,6 +45,12 @@ This fork integrates the **Airlift** capability from [Mak5er/AirCard-iOS](https:
 /var/mobile/Containers/Shared/AppGroup
 /var/tmp
 ```
+
+### Browsing app containers without HouseArrest
+
+`/var/mobile/Containers/Data/Application`, `/var/mobile/Containers/Shared/AppGroup` and `/var/mobile/Applications` sit outside the `/var/mobile/Media` root that AFC is jailed to, so plain AFC (`al_dir_list`) cannot list them and `com.apple.mobile.house_arrest` only vends containers for apps carrying a developer profile (`PermDenied` for most installed apps). Those paths are therefore read with the **AirManager trick**, exposed as `al_airlift_list_dir`: the Apple Books sync engine (`com.apple.atc` + `com.apple.streaming_zip_conduit`) is used as a "move any object anywhere" primitive. One AirTraffic sync moves the directory out to `Airlock/Read/<token>`, where ordinary AFC lists it (the row you see is `{"name","is_dir","size"}`, the same shape as every other remote listing), and a second AirTraffic sync moves it straight back through a symlink that points at its real parent — directories move as a unit, so the container is left byte-identical. The container root itself is still enumerated with InstallationProxy (`al_list_apps`) so the app rows keep their names; every other root on the list above stays on plain AFC and keeps showing its honest error when AFC cannot see it.
+
+Two safety nets come with that sequence, both implemented in `rust-core/src/airlift_dir.rs`: `Books/Sync/Books.plist` and `OutstandingAssets_4.sqlite` are snapshotted (in memory and in a temp file) before the first sync and restored after every step, so a failed run cannot leave Books signed out or stuck on an update screen; and the pulled directory is only deleted once AFC confirms it is back at its original location. An interrupted run leaves the directory parked at `Airlock/Read/<token>` with a `<token>.json` recovery record beside it, the error text says `kept at Airlock/Read/<token>`, and **Settings › Airlift › "Recover staged copies"** (`al_airlift_recover`) replays the restore step for each such record. The sync is never started automatically: it only runs when you tap into a directory that needs it (pull-to-refresh deliberately serves the cached listing instead of moving anything), and every ATC sync is serialized behind one process-wide mutex.
 
 ### Building with AirLift
 
