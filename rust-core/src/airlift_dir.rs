@@ -59,9 +59,10 @@
 //!   (`…/Containers/Data/Application`, `…/Containers/Shared/AppGroup`,
 //!   `/var/mobile/Applications`) and any `..` component. `/var/mobile/Media`
 //!   is *not* reachable, so the Airlift staging zone cannot be targeted.
-//! * `Books/Sync/Books.plist` and `OutstandingAssets_4.sqlite` are snapshotted
-//!   before the first sync (in memory *and* in a temp file inside the app
-//!   container) and restored after every step.
+//! * `Books/Sync/Books.plist` is snapshotted before the first sync (in memory
+//!   *and* in a temp file inside the app container) and restored after every
+//!   step. `OutstandingAssets_*.sqlite` is treated as volatile — never
+//!   snapshotted, never restored, only edited (see `clean_outstanding`).
 //! * One process-wide mutex (the same `lock_tunnel` the AFC browser uses)
 //!   serialises every ATC sync.
 //! * Nothing is deleted unless the *next* link in the chain is confirmed by
@@ -79,7 +80,7 @@ use crate::browse::{
     base64_decode, base64_encode, finish_string_result, list_dir_json, lock_tunnel,
 };
 use crate::exploit::{
-    atc_message_name, connect_tunnel, make_atc_msg, random_hex, read_atc_dict,
+    atc_message_name, connect_tunnel, make_atc_msg, new_item_base, random_hex, read_atc_dict,
     send_atc_dict, AppDeviceTunnel, Logger, ALLogCallback, LINK_PREFIX,
 };
 use crate::ffi_util::{opt_str, run_with_large_stack};
@@ -99,10 +100,14 @@ const LINK_ENTRY: &str = "p0/p1/p2/link";
 
 /// Sync metadata that is snapshotted before, and restored after, every step.
 ///
-/// `OutstandingAssets_4.sqlite` keeps the daemon's outstanding-asset journal; a
-/// manifest that does not match it is what leaves Books stuck on an update
-/// screen, so both plausible spellings (with/without the `Database`
-/// component) and the `-wal`/`-shm` siblings are covered.
+/// `Books/Sync/Books.plist` is the catalog the daemon parses, so it is the one
+/// file that is snapshotted and put back byte-for-byte.
+///
+/// `OutstandingAssets_*.sqlite` is the daemon's outstanding-asset journal and is
+/// **volatile**: see [`is_volatile_sync_state`] — it is cleaned by
+/// [`clean_outstanding`], never restored. Both plausible spellings (with/without
+/// the `Database` component) and the `-wal`/`-shm` siblings are listed so the
+/// snapshot keeps naming every file it once covered.
 const SYNC_STATE_FILES: &[&str] = &[
     BOOKS_PLIST,
     "Books/Sync/Database/OutstandingAssets_4.sqlite",
@@ -115,6 +120,11 @@ const SYNC_STATE_FILES: &[&str] = &[
 
 /// Largest sync-metadata file that is snapshotted (16 MiB).
 const MAX_BACKUP_BYTES: usize = 16 * 1024 * 1024;
+/// AFC directories that may hold the outstanding-asset journal.
+const OUTSTANDING_DIRS: &[&str] = &["Books/Sync/Database", "Books/Sync"];
+/// Tables `OutstandingAssets_*.sqlite` keeps outstanding-asset rows in.
+const OUTSTANDING_TABLES: &[&str] = &["ZBCOUTSTANDINGASSET", "ZBCINSTALLEDASSET"];
+
 /// Catalog rows the pull manifest may carry alongside the requested one.
 /// The reference allows 127 preserved rows next to at most 128 manifest
 /// entries: acl/crates/core/src/books.rs:137 and
@@ -237,6 +247,289 @@ fn media_asset_id(relative_to_media: &str) -> String {
     format!("../../{relative_to_media}")
 }
 
+/// `path` names the Books daemon's outstanding-asset journal, which must never be
+/// snapshotted or restored byte-for-byte.
+///
+/// `OutstandingAssets_*.sqlite` and its `-wal`/`-shm` sidecars are *volatile*:
+/// the daemon rewrites them on every sync, so byte-comparing one against a
+/// snapshot only ever yields a false "Books state differs" conflict, and
+/// writing a stale copy back resurrects rows the daemon has already retired.
+/// [`clean_outstanding`] is what edits them instead.
+fn is_volatile_sync_state(path: &str) -> bool {
+    path.rsplit('/')
+        .next()
+        .is_some_and(|name| name.starts_with("OutstandingAssets_") && name.contains(".sqlite"))
+}
+
+// ---------------------------------------------------------------------------
+// OutstandingAssets journal hygiene
+// ---------------------------------------------------------------------------
+
+#[link(name = "sqlite3")]
+extern "C" {
+    fn sqlite3_open_v2(
+        filename: *const libc::c_char,
+        db: *mut *mut libc::c_void,
+        flags: libc::c_int,
+        vfs: *const libc::c_char,
+    ) -> libc::c_int;
+    fn sqlite3_exec(
+        db: *mut libc::c_void,
+        sql: *const libc::c_char,
+        callback: *mut libc::c_void,
+        arg: *mut libc::c_void,
+        errmsg: *mut *mut libc::c_char,
+    ) -> libc::c_int;
+    fn sqlite3_errmsg(db: *mut libc::c_void) -> *const libc::c_char;
+    fn sqlite3_free(ptr: *mut libc::c_void);
+    fn sqlite3_close_v2(db: *mut libc::c_void) -> libc::c_int;
+}
+
+const SQLITE_OPEN_READWRITE: libc::c_int = 0x00000002;
+const SQLITE_OPEN_CREATE: libc::c_int = 0x00000004;
+const SQLITE_OK: libc::c_int = 0;
+
+/// Delete the dead outstanding-asset rows from one database image.
+///
+/// `ZPERSISTENTID LIKE '../%'` is the CarrierSIM-fixpack fix (verified on
+/// iOS 27), repeated for both tables the daemon uses. Such a row is an
+/// `AssetID` that was only ever meaningful relative to the sync that created
+/// it (`../../…`); once that sync is over the id is dead, and leaving it in the
+/// journal is what makes the next run look like its manifest was never
+/// accepted.
+///
+/// The image is edited on a scratch copy in the process temp directory — never
+/// the device file in place — so a failure half way through leaves the original
+/// bytes untouched. Returns the rewritten image, or `Err` with SQLite's own
+/// message.
+fn purge_dead_outstanding_rows(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    use std::ffi::CString;
+
+    let scratch = std::env::temp_dir().join(format!(
+        "airlift-outstanding-{}-{}.sqlite",
+        std::process::id(),
+        random_hex(6)
+    ));
+    let scratch_c = CString::new(scratch.to_string_lossy().as_bytes())
+        .map_err(|e| format!("scratch path is not NUL-terminated: {e}"))?;
+    // On any early return the scratch database must not be left behind — and in
+    // WAL mode SQLite puts two more files next to it, so all three go.
+    let _cleanup = scopeguard(scratch.clone(), |p| {
+        let _ = std::fs::remove_file(p);
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let sidecar = p.with_file_name(format!(
+                "{}{suffix}",
+                p.file_name().unwrap_or_default().to_string_lossy()
+            ));
+            let _ = std::fs::remove_file(sidecar);
+        }
+    });
+
+    std::fs::write(&scratch, bytes).map_err(|e| format!("write scratch copy: {e}"))?;
+
+    let mut db: *mut libc::c_void = std::ptr::null_mut();
+    // SAFETY: `scratch_c` outlives the handle; `db` is a fresh out-pointer and
+    // SQLite zero-initialises it.
+    let rc = unsafe {
+        sqlite3_open_v2(
+            scratch_c.as_ptr(),
+            &mut db,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+            std::ptr::null(),
+        )
+    };
+    if rc != SQLITE_OK {
+        // SQLite allocates the handle even on failure so the message can be read.
+        let msg = if db.is_null() {
+            format!("sqlite3_open_v2 failed with code {rc}")
+        } else {
+            let m = unsafe { std::ffi::CStr::from_ptr(sqlite3_errmsg(db)) }
+                .to_string_lossy()
+                .into_owned();
+            unsafe { sqlite3_close_v2(db) };
+            format!("sqlite3_open_v2: {m}")
+        };
+        return Err(msg);
+    }
+
+    let mut outcome: Result<Vec<u8>, String> = Ok(Vec::new());
+    for table in OUTSTANDING_TABLES {
+        let sql = CString::new(format!(
+            "delete from {table} where ZPERSISTENTID like '../%'"
+        ))
+        .expect("table names are literal, so this cannot contain a NUL");
+        let mut errmsg: *mut libc::c_char = std::ptr::null_mut();
+        // SAFETY: `db` is an open handle, `sql` outlives the call, and both
+        // out-params are pre-initialised.
+        let rc = unsafe {
+            sqlite3_exec(
+                db,
+                sql.as_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut errmsg,
+            )
+        };
+        if rc != SQLITE_OK {
+            let msg = if errmsg.is_null() {
+                format!("sqlite3_exec failed with code {rc}")
+            } else {
+                let m = unsafe { std::ffi::CStr::from_ptr(errmsg) }
+                    .to_string_lossy()
+                    .into_owned();
+                unsafe { sqlite3_free(errmsg.cast()) };
+                m
+            };
+            outcome = Err(format!("{table}: {msg}"));
+            break;
+        }
+    }
+
+    if outcome.is_ok() {
+        // Close *before* reading: in WAL mode — which is what the on-device
+        // journal uses, hence its `-wal`/`-shm` siblings — the committed pages
+        // only reach the main database file when the last handle goes away, so
+        // reading while the handle is still open would return the pre-cleanup
+        // bytes.
+        // SAFETY: `db` came from a successful sqlite3_open_v2 and is closed once.
+        unsafe { sqlite3_close_v2(db) };
+        match std::fs::read(&scratch) {
+            Ok(out) => outcome = Ok(out),
+            Err(e) => outcome = Err(format!("read back scratch copy: {e}")),
+        }
+    } else {
+        // SAFETY: as above; this is the only other path that reaches the close.
+        unsafe { sqlite3_close_v2(db) };
+    }
+    outcome
+}
+
+/// Minimal `scopeguard`: run `f(path)` when this goes out of scope.
+struct ScopeGuard<F: FnOnce(&std::path::PathBuf)> {
+    path: std::path::PathBuf,
+    run: Option<F>,
+}
+
+impl<F: FnOnce(&std::path::PathBuf)> Drop for ScopeGuard<F> {
+    fn drop(&mut self) {
+        if let Some(run) = self.run.take() {
+            run(&self.path);
+        }
+    }
+}
+
+fn scopeguard<F: FnOnce(&std::path::PathBuf)>(
+    path: std::path::PathBuf,
+    run: F,
+) -> ScopeGuard<F> {
+    ScopeGuard {
+        path,
+        run: Some(run),
+    }
+}
+
+/// Drop every dead outstanding-asset row, so a sync can be repeated.
+///
+/// Every ATC session leaves `../../…`-rooted rows behind in
+/// `Books/Sync/Database/OutstandingAssets_*.sqlite`; they are dead the moment
+/// the session ends, and they are what makes the *second* run of an asset look
+/// like the daemon rejected its manifest. This runs twice per pull — once right
+/// after the snapshot is taken, once again immediately before the state is
+/// restored — so a failed first attempt self-heals on the next one.
+///
+/// Entirely best-effort: a missing directory, an unreadable database or a
+/// SQLite complaint is logged as a single line and never fails the run, because
+/// nothing here is load-bearing for the move itself.
+async fn clean_outstanding(afc: &mut AfcClient, logger: &Logger) {
+    let mut targets: Vec<String> = Vec::new();
+    for dir in OUTSTANDING_DIRS {
+        let names = match afc.list_dir((*dir).to_owned()).await {
+            Ok(names) => names,
+            Err(e) => {
+                logger.log(format!("airlift: warning: cannot list {dir} for the outstanding-asset journal ({e:?})"));
+                continue;
+            }
+        };
+        for name in names {
+            if name.is_empty() || name == "." || name == ".." {
+                continue;
+            }
+            if is_volatile_sync_state(&name) && !name.contains("-wal") && !name.contains("-shm") {
+                targets.push(format!("{dir}/{name}"));
+            }
+        }
+    }
+
+    if targets.is_empty() {
+        logger.log(
+            "airlift: no OutstandingAssets_*.sqlite to clean (nothing outstanding is journalled)",
+        );
+        return;
+    }
+
+    for path in targets {
+        let mut fd = match afc.open(path.clone(), AfcFopenMode::RdOnly).await {
+            Ok(fd) => fd,
+            Err(e) => {
+                logger.log(format!(
+                    "airlift: warning: cannot read {path} to drop dead rows ({e:?})"
+                ));
+                continue;
+            }
+        };
+        let read = fd.read_entire().await;
+        let _ = fd.close().await;
+        let bytes = match read {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                logger.log(format!(
+                    "airlift: warning: cannot read {path} to drop dead rows ({e:?})"
+                ));
+                continue;
+            }
+        };
+
+        match purge_dead_outstanding_rows(&bytes) {
+            Ok(cleaned) => {
+                match afc.open(path.clone(), AfcFopenMode::WrOnly).await {
+                    Ok(mut fd) => {
+                        let write = fd.write_entire(&cleaned).await;
+                        let close = fd.close().await;
+                        if write.is_ok() && close.is_ok() {
+                            logger.log(format!(
+                                "airlift: dropped the '../%' rows from {path} ({} byte(s) in, {} byte(s) out)",
+                                bytes.len(),
+                                cleaned.len()
+                            ));
+                        } else {
+                            logger.log(format!(
+                                "airlift: warning: could not write the cleaned {path} back (write={:?} close={:?})",
+                                write.err(),
+                                close.err()
+                            ));
+                        }
+                    }
+                    Err(e) => logger.log(format!(
+                        "airlift: warning: cannot reopen {path} to write the cleaned rows back ({e:?})"
+                    )),
+                }
+            }
+            Err(e) => logger.log(format!(
+                "airlift: warning: leaving {path} alone, its '../%' rows need a device-side edit ({e})"
+            )),
+        }
+
+        // The WAL/SHM pair belongs to the image that was just replaced; leaving
+        // them behind would let the daemon replay the pre-cleanup rows.
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = format!("{path}{suffix}");
+            if afc.remove(sidecar.clone()).await.is_ok() {
+                logger.log(format!("airlift: removed the {sidecar} sidecar"));
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Books sync-state snapshot
 // ---------------------------------------------------------------------------
@@ -263,9 +556,20 @@ struct BooksSyncBackup {
 impl BooksSyncBackup {
     /// Read every sync-metadata file over AFC. Missing files are recorded as
     /// [`BackupState::Absent`] so the restore can undo a create.
+    ///
+    /// Volatile entries ([`is_volatile_sync_state`]) are recorded as
+    /// [`BackupState::Untouched`] without being read: the daemon rewrites them
+    /// on every sync, so they are cleaned by [`clean_outstanding`] instead of
+    /// being snapshotted and written back byte-for-byte.
     async fn capture(afc: &mut AfcClient, token: &str, logger: &Logger) -> Self {
         let mut entries = Vec::with_capacity(SYNC_STATE_FILES.len());
+        let mut volatile = 0usize;
         for path in SYNC_STATE_FILES {
+            if is_volatile_sync_state(path) {
+                volatile += 1;
+                entries.push(((*path).to_owned(), BackupState::Untouched));
+                continue;
+            }
             let state = match afc.get_file_info((*path).to_owned()).await {
                 Ok(info) if info.size > MAX_BACKUP_BYTES => {
                     logger.log(format!(
@@ -308,18 +612,27 @@ impl BooksSyncBackup {
             };
             entries.push(((*path).to_owned(), state));
         }
-        logger.log(format!("airlift: snapshotted {} Books sync-state file(s)", entries.len()));
+        logger.log(format!(
+            "airlift: snapshotted {} Books sync-state file(s), {volatile} volatile outstanding-asset file(s) left alone",
+            entries.len()
+        ));
         Self { token: token.to_owned(), entries }
     }
 
     /// Put the snapshotted bytes back. Best-effort: a failure here is logged
     /// and reported, never silently swallowed.
+    ///
+    /// Volatile entries are skipped outright, so a snapshot taken before the
+    /// journal was declared volatile cannot resurrect the dead `../%` rows.
     async fn restore(&self, afc: &mut AfcClient, logger: &Logger) -> Result<(), String> {
         let _ = afc.mk_dir("Books").await;
         let _ = afc.mk_dir("Books/Sync").await;
         let _ = afc.mk_dir("Books/Sync/Database").await;
         let mut failures: Vec<String> = Vec::new();
         for (path, state) in &self.entries {
+            if is_volatile_sync_state(path) {
+                continue;
+            }
             match state {
                 BackupState::Present { data_b64 } => {
                     let bytes = base64_decode(data_b64)
@@ -593,9 +906,11 @@ async fn stage_restore_symlink(
 ///   acl/crates/core/src/books.rs:74 (`synthetic_books_plist`), replaced with the
 ///   real asset id at acl/crates/core/src/staging.rs:42-45 and re-emitted per
 ///   transfer at acl/crates/core/src/customization.rs:198.
-/// * `Item ID` — string, 1-based index of the row inside the request.
-///   acl/crates/core/src/books.rs:75 (single asset) and
-///   acl/crates/core/src/customization.rs:199 (`n + 1` for each transfer row).
+/// * `Item ID` — string, counted up from `item_base`. acl/crates/core/src/books.rs:75
+///   (single asset) and acl/crates/core/src/customization.rs:199 (`n + 1` for each
+///   transfer row). The reference used a fixed `1`; iOS dedupes outstanding assets
+///   by `(DSID, Item ID)`, so a fixed base made every sync after the first reuse a
+///   pair the daemon had already retired — see [`crate::exploit::new_item_base`].
 /// * `DSID` — always `"1"`. acl/crates/core/src/books.rs:76,
 ///   acl/crates/core/src/customization.rs:200.
 ///
@@ -613,7 +928,15 @@ async fn stage_restore_symlink(
 /// so the device's own catalog rows vanished from the request; the first sync
 /// consumed the Books asset state and later ones were answered with
 /// `ObjectNotFound`.
-fn build_pull_manifest(identifiers: &[String], preserved: &[plist::Value]) -> Result<Vec<u8>, String> {
+///
+/// `item_base` must be fresh per sync: the first sync with the old hard-coded
+/// `(DSID, Item ID)` pair consumes it, and every later sync reusing it is
+/// silently dropped from the AssetManifest.
+fn build_pull_manifest(
+    identifiers: &[String],
+    preserved: &[plist::Value],
+    item_base: u64,
+) -> Result<Vec<u8>, String> {
     let mut rows: Vec<plist::Value> = preserved.to_vec();
     if rows.len() > MAX_PRESERVED_ROWS {
         return Err(format!(
@@ -626,7 +949,7 @@ fn build_pull_manifest(identifiers: &[String], preserved: &[plist::Value]) -> Re
         row.insert("Persistent ID".to_owned(), plist::Value::String(id.clone()));
         row.insert(
             "Item ID".to_owned(),
-            plist::Value::String((index + 1).to_string()),
+            plist::Value::String((item_base + index as u64 + 1).to_string()),
         );
         row.insert("DSID".to_owned(), plist::Value::String("1".to_owned()));
         rows.push(plist::Value::Dictionary(row));
@@ -694,18 +1017,23 @@ fn preserved_rows(
 
 /// Write the pull/restore manifest: every preserved catalog row from the
 /// snapshot, then one requested row per identifier.
+///
+/// `item_base` has to be a value no earlier sync used — each ATC session is one
+/// sync, and iOS drops a request whose `(DSID, Item ID)` pair it has already
+/// consumed. Callers therefore pass a base they just generated.
 async fn write_books_plist(
     afc: &mut AfcClient,
     identifiers: &[String],
     preserved: &[plist::Value],
+    item_base: u64,
     logger: &Logger,
 ) -> Result<(), String> {
     for dir in ["Airlock", "Airlock/Book", AIRLOCK_READ, "Books", "Books/Sync"] {
         let _ = afc.mk_dir(dir).await;
     }
-    let plist_bytes = build_pull_manifest(identifiers, preserved)?;
+    let plist_bytes = build_pull_manifest(identifiers, preserved, item_base)?;
     logger.log(format!(
-        "airlift: manifest to write = {} byte(s), {} preserved row(s), requested {:?}",
+        "airlift: manifest to write = {} byte(s), {} preserved row(s), Item ID base {item_base}, requested {:?}",
         plist_bytes.len(),
         preserved.len(),
         identifiers
@@ -1368,9 +1696,13 @@ fn classify_restore(
 
 /// Pull `target_abs` into `Airlock/Read/<T>`, list it, push it back and clean
 /// up. Returns the listing JSON in exactly the shape `al_dir_list` emits.
+///
+/// `item_base` is the `Item ID` base of the STEP B request; it must be a value
+/// no earlier sync used (STEP C derives its own, because it is a separate sync).
 async fn pull_list_and_restore(
     pairing_path: &str,
     target_abs: &str,
+    item_base: u64,
     logger: &Logger,
 ) -> Result<String, String> {
     let (parent, basename) = parent_and_basename(target_abs)?;
@@ -1394,6 +1726,9 @@ async fn pull_list_and_restore(
         Ok(path) => logger.log(format!("airlift: sync-state snapshot saved to {path:?}")),
         Err(e) => logger.log(format!("airlift: could not save sync-state snapshot: {e}")),
     }
+    // Self-heal: every past sync left dead `../../…` rows in the journal, and
+    // those are what makes a repeat run look like the manifest was refused.
+    clean_outstanding(&mut afc, logger).await;
 
     // ── STEP A: stage the restore symlink ──────────────────────────────────
     if let Err(e) = stage_restore_symlink(
@@ -1439,6 +1774,7 @@ async fn pull_list_and_restore(
         &mut afc,
         std::slice::from_ref(&asset_id_pull),
         &preserved_pull,
+        item_base,
         logger,
     )
     .await
@@ -1521,6 +1857,9 @@ async fn pull_list_and_restore(
         .unwrap_or_else(|| format!("{read_dir} was not listable after the pull"));
 
     // ── STEP D (first half): restore the sync state, then the recovery record ──
+    // STEP B's own sync journalled rows of its own, so the journal is cleaned
+    // once more here — before the state is restored and STEP C runs.
+    clean_outstanding(&mut afc, logger).await;
     // The STEP C manifest is written below anyway, so a restore problem here is
     // not fatal — but it is worth surfacing, and the final restore runs again.
     if let Err(e) = backup.restore(&mut afc, logger).await {
@@ -1569,10 +1908,14 @@ async fn pull_list_and_restore(
         });
     let mut step_c_diag = SyncDiag::default();
     let step_c_result = async {
+        // STEP C is its own ATC session, so it needs its own `Item ID` base:
+        // reusing STEP B's pair would have iOS drop both restore rows.
+        let step_c_item_base = new_item_base();
         write_books_plist(
             &mut afc,
             &[asset_id_link.clone(), asset_id_read.clone()],
             &preserved_c,
+            step_c_item_base,
             logger,
         )
         .await?;
@@ -1684,6 +2027,7 @@ async fn restore_record(
     afc: &mut AfcClient,
     record: &RecoveryRecord,
     backup: &BooksSyncBackup,
+    item_base: u64,
     logger: &Logger,
 ) -> serde_json::Value {
     let mut result = serde_json::json!({ "target": record.target, "token": record.token });
@@ -1731,6 +2075,7 @@ async fn restore_record(
             afc,
             &[asset_id_link.clone(), asset_id_read.clone()],
             &preserved,
+            item_base,
             logger,
         )
         .await?;
@@ -1810,7 +2155,16 @@ async fn recover_read_dirs(pairing_path: &str, logger: &Logger) -> Result<String
                 continue;
             }
         };
-        let result = restore_record(&mut tunnel, &mut afc, &record, &backup, logger).await;
+        let result = restore_record(
+            &mut tunnel,
+            &mut afc,
+            &record,
+            &backup,
+            new_item_base(),
+            logger,
+        )
+        .await;
+        clean_outstanding(&mut afc, logger).await;
         let _ = backup.restore(&mut afc, logger).await;
         results.push(result);
     }
@@ -1874,7 +2228,12 @@ pub unsafe fn list_dir(
         let target = checked_pull_path(&requested)?;
         // One ATC sync at a time, process-wide, shared with the AFC browser.
         let _guard = lock_tunnel("al_airlift_list_dir");
-        idevice_ffi::run_sync_local(pull_list_and_restore(&pairing_path, &target, &logger))
+        idevice_ffi::run_sync_local(pull_list_and_restore(
+            &pairing_path,
+            &target,
+            new_item_base(),
+            &logger
+        ))
     });
 
     finish_string_result(res, "al_airlift_list_dir", out_json, out_error)
@@ -1917,7 +2276,7 @@ mod tests {
     use super::{
         asset_id_for_device_path, build_pull_manifest, checked_pull_path,
         link_target_for_parent, media_asset_id, parent_and_basename, preserved_rows,
-        BackupState, BooksSyncBackup, RecoveryRecord, SyncDiag,
+        BackupState, BooksSyncBackup, RecoveryRecord, SyncDiag, BOOKS_PLIST,
     };
 
     const UUID_DIR: &str = "/var/mobile/Containers/Data/Application/DEADBEEF-0000-0000-0000-000000000000/Documents";
@@ -2078,13 +2437,16 @@ mod tests {
         //                  acl/crates/core/src/books.rs:149-150
         //   preserved rows come back as IsDownload=false
         //                  acl/crates/airtraffic/src/lib.rs:169-171
+        // The fixed `Item ID` of the reference is the regression below: this
+        // test pins it with item_base = 0, `pull_manifest_item_ids_are_unique_per_sync`
+        // pins the fix.
         let preserved = vec![
             catalog_row("existing-id-1", "Purchases/one.epub", "One"),
             catalog_row("existing-id-2", "Purchases/two.epub", "Two"),
         ];
         let requested = vec!["../../../Containers/Data/Application/DEADBEEF/Documents".to_owned()];
 
-        let bytes = build_pull_manifest(&requested, &preserved).unwrap();
+        let bytes = build_pull_manifest(&requested, &preserved, 0).unwrap();
         assert_eq!(&bytes[..8], b"bplist00", "manifest must stay a binary plist");
 
         let decoded = plist::from_bytes::<plist::Value>(&bytes).unwrap();
@@ -2121,6 +2483,7 @@ mod tests {
         let two = build_pull_manifest(
             &["../../airlift-pull-abc/p0/p1/p2/link".to_owned(), "../../Airlock/Read/abc".to_owned()],
             &[],
+            0,
         )
         .unwrap();
         let two_rows = plist::from_bytes::<plist::Value>(&two)
@@ -2151,6 +2514,110 @@ mod tests {
                 Some("1")
             );
         }
+    }
+
+    /// Regression guard for "the first run works, the second one never lists":
+    /// iOS dedupes outstanding Book assets by `(DSID, Item ID)`, so a manifest
+    /// that always spells `(1, 1)` is consumed by the first sync and silently
+    /// dropped from every later AssetManifest. A non-zero `item_base` has to
+    /// push the rows off that pair.
+    #[test]
+    fn pull_manifest_item_ids_are_unique_per_sync() {
+        let requested = vec![
+            "../../airlift-pull-abc/p0/p1/p2/link".to_owned(),
+            "../../Airlock/Read/abc".to_owned(),
+            "../../airlift-recovered-abc".to_owned(),
+        ];
+        let rows_of = |item_base: u64| -> Vec<String> {
+            let bytes = build_pull_manifest(&requested, &[], item_base).unwrap();
+            plist::from_bytes::<plist::Value>(&bytes)
+                .unwrap()
+                .as_dictionary()
+                .unwrap()["Books"]
+                .as_array()
+                .unwrap()
+                .clone()
+                .iter()
+                .map(|row| {
+                    row.as_dictionary()
+                        .unwrap()
+                        .get("Item ID")
+                        .and_then(plist::Value::as_string)
+                        .unwrap()
+                        .to_owned()
+                })
+                .collect()
+        };
+
+        // Base 0 reproduces the reference: "1", "2", "3".
+        assert_eq!(rows_of(0), vec!["1", "2", "3"]);
+
+        // A real per-sync base shifts every row by the same amount, so the
+        // pairs stay distinct within the manifest *and* differ from the pair
+        // the previous sync used.
+        let first = rows_of(1_234_567_890);
+        assert_eq!(first, vec!["1234567891", "1234567892", "1234567893"]);
+        let second = rows_of(1_234_567_900);
+        assert_eq!(second, vec!["1234567901", "1234567902", "1234567903"]);
+
+        // Nothing in either manifest may collide with the pair iOS already
+        // consumed, nor with each other.
+        for base in [1_234_567_890, 1_234_567_900] {
+            let ids = rows_of(base);
+            let unique: std::collections::HashSet<&String> = ids.iter().collect();
+            assert_eq!(unique.len(), ids.len(), "rows {ids:?} must not repeat");
+            assert!(
+                !ids.iter().any(|id| id == "1"),
+                "base {base} still emits the consumed (DSID 1, Item ID 1) pair: {ids:?}"
+            );
+        }
+    }
+
+    /// The outstanding-asset journal is volatile: byte-comparing it against a
+    /// snapshot only produces false conflicts, so it must never be snapshotted
+    /// or restored, and it has to be found by the `OutstandingAssets_*` glob
+    /// rather than by the single `OutstandingAssets_4` spelling.
+    #[test]
+    fn the_outstanding_asset_journal_counts_as_volatile() {
+        for volatile_path in [
+            "Books/Sync/Database/OutstandingAssets_4.sqlite",
+            "Books/Sync/Database/OutstandingAssets_4.sqlite-wal",
+            "Books/Sync/Database/OutstandingAssets_4.sqlite-shm",
+            "Books/Sync/OutstandingAssets_4.sqlite",
+            "Books/Sync/Database/OutstandingAssets_9.sqlite",
+        ] {
+            assert!(
+                super::is_volatile_sync_state(volatile_path),
+                "{volatile_path} must be treated as volatile"
+            );
+        }
+        // Everything that is genuinely restorable must not be swept up by the
+        // glob: the catalog manifest is the one file a restore has to rewrite.
+        for kept in [
+            BOOKS_PLIST,
+            "Books/Sync/Books.plist-wal",
+            "Books/Sync/Upload.plist",
+        ] {
+            assert!(
+                !super::is_volatile_sync_state(kept),
+                "{kept} must stay restorable"
+            );
+        }
+
+        // A snapshot taken before the journal was declared volatile must not be
+        // able to resurrect its rows: restore skips volatile paths whatever the
+        // recorded state says.
+        let backup: BooksSyncBackup = serde_json::from_slice(
+            br#"{"token":"t","entries":[
+                ["Books/Sync/Database/OutstandingAssets_4.sqlite",{"state":"present","data_b64":"AAECAw=="}],
+                ["Books/Sync/Books.plist",{"state":"present","data_b64":"AAECAw=="}]
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            backup.entries[0].0,
+            "Books/Sync/Database/OutstandingAssets_4.sqlite"
+        );
     }
 
     #[test]
@@ -2382,6 +2849,196 @@ mod tests {
         assert!(
             between.find("write_recovery_record").unwrap() < between.find("return Err").unwrap(),
             "the only early return must be the one guarding write_recovery_record"
+        );
+    }
+
+    // -- OutstandingAssets journal purge --------------------------------------
+    //
+    // The fixture is built through SQLite itself so the test needs no checked-in
+    // database image and exercises the real SQL against a real engine.
+    mod sqlite {
+        use std::ffi::{c_char, c_int, c_void, CStr, CString};
+
+        use super::super::{
+            sqlite3_close_v2, sqlite3_errmsg, sqlite3_exec, sqlite3_open_v2, SQLITE_OPEN_CREATE,
+            SQLITE_OPEN_READWRITE,
+        };
+
+        /// `sqlite3_exec` callback: appends the first column of every row.
+        extern "C" fn collect(
+            ctx: *mut c_void,
+            _count: c_int,
+            values: *mut *mut c_char,
+            _names: *mut c_char,
+        ) -> c_int {
+            // SAFETY: SQLite hands us a live row of C strings; `ctx` is the
+            // `&mut Vec<String>` `exec_with_arg` below passed in.
+            unsafe {
+                let out = &mut *(ctx as *mut Vec<String>);
+                out.push(CStr::from_ptr(*values).to_string_lossy().into_owned());
+            }
+            0
+        }
+
+        pub fn open(path: &std::path::Path) -> *mut c_void {
+            let c_path = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+            let mut db: *mut c_void = std::ptr::null_mut();
+            // SAFETY: fresh out-pointer, live path, SQLite zero-initialises db.
+            let rc = unsafe {
+                sqlite3_open_v2(
+                    c_path.as_ptr(),
+                    &mut db,
+                    SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+                    std::ptr::null(),
+                )
+            };
+            assert_eq!(rc, 0, "open {}: {}", path.display(), errmsg(db));
+            db
+        }
+
+        fn errmsg(db: *mut c_void) -> String {
+            // SAFETY: `db` is an open handle.
+            unsafe { CStr::from_ptr(sqlite3_errmsg(db)).to_string_lossy().into_owned() }
+        }
+
+        /// Run one statement, discarding any rows.
+        pub fn exec(db: *mut c_void, sql: &str) {
+            let c_sql = CString::new(sql).unwrap();
+            let mut err: *mut c_char = std::ptr::null_mut();
+            // SAFETY: open handle, `c_sql` outlives the call, out-param is nulled.
+            let rc = unsafe {
+                sqlite3_exec(
+                    db,
+                    c_sql.as_ptr(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &mut err,
+                )
+            };
+            assert_eq!(rc, 0, "`{sql}` failed ({}): {err:?}", errmsg(db));
+        }
+
+        /// Run one query and collect the first column of every row.
+        pub fn query_rows(db: *mut c_void, sql: &str) -> Vec<String> {
+            let c_sql = CString::new(sql).unwrap();
+            let mut err: *mut c_char = std::ptr::null_mut();
+            let mut out: Vec<String> = Vec::new();
+            // SAFETY: as above; `collect` is a plain `extern "C"` fn pointer and
+            // `out` outlives the call.
+            let rc = unsafe {
+                sqlite3_exec(
+                    db,
+                    c_sql.as_ptr(),
+                    collect as *mut c_void,
+                    &mut out as *mut Vec<String> as *mut c_void,
+                    &mut err,
+                )
+            };
+            assert_eq!(rc, 0, "`{sql}` failed ({}): {err:?}", errmsg(db));
+            out
+        }
+
+        /// `Persistent ID` of every row of `table`.
+        pub fn persistent_ids(db: *mut c_void, table: &str) -> Vec<String> {
+            query_rows(db, &format!("select ZPERSISTENTID from {table}"))
+        }
+    }
+
+    /// Pins the CarrierSIM-fixpack purge (verified on iOS 27): every row whose
+    /// `ZPERSISTENTID` is Books-relative — `../…`, `../../…`, and the
+    /// `../../../Containers/…` spelling our own pulls use — is deleted from both
+    /// `ZBCOUTSTANDINGASSET` and `ZBCINSTALLEDASSET`, while the device's own
+    /// catalog rows survive untouched. A stale relative row is what makes the
+    /// next run of the same asset look like its manifest was refused.
+    #[test]
+    fn purging_the_journal_drops_relative_ids_only() {
+        let dir = std::env::temp_dir().join(format!("airlift-journal-test-{}", super::random_hex(6)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixture = dir.join("OutstandingAssets_4.sqlite");
+        let cleaned_path = dir.join("cleaned.sqlite");
+
+        {
+            let db = sqlite::open(&fixture);
+            for table in super::OUTSTANDING_TABLES {
+                sqlite::exec(
+                    db,
+                    &format!("create table {table}(ZPERSISTENTID text, ZASSETID text)"),
+                );
+            }
+            sqlite::exec(
+                db,
+                "insert into ZBCOUTSTANDINGASSET values
+                 ('../../airlift-pull-abc/p0/p1/p2/link','link'),
+                 ('../../Airlock/Read/abc','read'),
+                 ('../../../Containers/Data/Application/DEADBEEF/Documents','doc'),
+                 ('Purchases/one.epub','keep-1')",
+            );
+            sqlite::exec(
+                db,
+                "insert into ZBCINSTALLEDASSET values
+                 ('../../Airlock/Read/abc','read'),
+                 ('iBooks://book.epub','keep-2')",
+            );
+            // WAL, like the on-device journal: the committed pages only reach
+            // the main file when the last handle closes, so the purge has to
+            // close before it reads the image back.
+            sqlite::exec(db, "pragma journal_mode = WAL");
+            let ids = sqlite::persistent_ids(db, "ZBCOUTSTANDINGASSET");
+            assert_eq!(ids.len(), 4, "fixture must start with four rows");
+            // SAFETY: `db` came from `sqlite::open` and is closed exactly once.
+            unsafe { super::sqlite3_close_v2(db) };
+        }
+
+        let cleaned =
+            super::purge_dead_outstanding_rows(&std::fs::read(&fixture).unwrap()).unwrap();
+        assert!(!cleaned.is_empty(), "the cleaned image must not be empty");
+        std::fs::write(&cleaned_path, &cleaned).unwrap();
+
+        let db = sqlite::open(&cleaned_path);
+        // Only the device's own catalog rows survive.
+        assert_eq!(
+            sqlite::persistent_ids(db, "ZBCOUTSTANDINGASSET"),
+            vec!["Purchases/one.epub".to_owned()],
+            "every Books-relative row must be gone from ZBCOUTSTANDINGASSET"
+        );
+        assert_eq!(
+            sqlite::persistent_ids(db, "ZBCINSTALLEDASSET"),
+            vec!["iBooks://book.epub".to_owned()],
+            "every Books-relative row must be gone from ZBCINSTALLEDASSET too"
+        );
+        // SAFETY: `db` came from `sqlite::open` and is closed exactly once.
+        unsafe { super::sqlite3_close_v2(db) };
+
+        // The scratch copy `purge_dead_outstanding_rows` worked in must not be
+        // left behind in the temp directory.
+        let leaked: Vec<String> = std::fs::read_dir(std::env::temp_dir())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("airlift-outstanding-"))
+            .collect();
+        assert!(leaked.is_empty(), "purge leaked scratch file(s): {leaked:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A database that is not SQLite at all must come back as an error rather
+    /// than as a rewritten image — `clean_outstanding` turns that into one
+    /// warning line, and it must never overwrite the file with garbage.
+    #[test]
+    fn purging_junk_is_reported_not_applied() {
+        let junk = b"SQLite format 3\x00 but truncated, definitely not a database".to_vec();
+        let err = super::purge_dead_outstanding_rows(&junk)
+            .expect_err("a corrupt image must not be reported as cleaned");
+        assert!(
+            !err.is_empty(),
+            "the error has to carry SQLite's own message for the log line"
+        );
+        // An empty file opens as a valid *empty* database, so the first DELETE
+        // fails on the missing table — an error too, never a silent success.
+        assert!(
+            super::purge_dead_outstanding_rows(&[]).is_err(),
+            "a database without the outstanding tables is an error, not a rewrite"
         );
     }
 }

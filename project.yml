@@ -41,7 +41,9 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         # idevice's static lib pulls in C++ symbols (aws-lc); link libc++.
-        OTHER_LDFLAGS: "-lc++"
+        # airlift_dir.rs purges the Books OutstandingAssets journal through
+        # libsqlite3 (part of the iOS SDK), so its symbols need a -l too.
+        OTHER_LDFLAGS: "-lc++ -lsqlite3"
         LD_RUNPATH_SEARCH_PATHS:
           - "$(inherited)"
           - "@executable_path/Frameworks"
