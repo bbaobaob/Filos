@@ -2,15 +2,21 @@
 //  RootLocationsView.swift
 //  Filos
 //
-//  Root screen: the Airlift-supported locations. Tapping a row pushes the
-//  regular FileBrowser so files inside can be viewed, edited, renamed, etc.
+//  Root screen: the 12 Airlift-supported locations, as a static list. Tapping a
+//  row pushes the regular FileBrowser so files inside can be viewed, edited,
+//  renamed, etc.
+//
+//  This view does no directory loading of its own. It renders one static row per
+//  `AirLiftModel.defaultTargets` entry and nothing else — no listing, no
+//  AirLiftModel observation, no ATC trigger — so it cannot re-enter a listing
+//  while a pushed screen is still working. The enumeration happens once, inside
+//  the pushed `FileBrowserView` (AFC / InstallationProxy / house_arrest).
 //
 
 import SwiftUI
 
 struct RootLocationsView: View {
     @EnvironmentObject var mgr: FilosManager
-    @StateObject private var airlift = AirLiftModel.shared
 
     @State private var showAirLift = false
     @State private var showLogs = false
@@ -18,62 +24,41 @@ struct RootLocationsView: View {
 
     @AppStorage("listStyle") var listStyle = 1
 
+    /// Row model, built once. `AirLiftModel.defaultTargets` is a static `let`,
+    /// so this never changes while the view lives — no state to mutate, nothing
+    /// to re-render on.
+    private struct RootRow: Identifiable {
+        let path: String
+        let name: String
+        var id: String { path }
+    }
+
+    private let rows: [RootRow] = AirLiftModel.defaultTargets.map {
+        RootRow(path: $0, name: URL(fileURLWithPath: $0).lastPathComponent)
+    }
+
     var body: some View {
         List {
             Section {
-                ForEach(AirLiftModel.defaultTargets, id: \.self) { path in
-                    Button {
-                        mgr.push(URL(fileURLWithPath: path))
+                ForEach(rows) { row in
+                    NavigationLink {
+                        FileBrowserContainer(level: 1, url: URL(fileURLWithPath: row.path))
                     } label: {
-                        NavigationLabel(text: URL(fileURLWithPath: path).lastPathComponent, symbol: "folder", footer: path, showChevron: true)
+                        NavigationLabel(text: row.name, symbol: "folder", footer: row.path, showChevron: true)
                     }
+                    .simultaneousGesture(TapGesture().onEnded {
+                        // The pushed FileBrowser reads `navArray[0]`, so record the
+                        // navigation here too. The link itself does the pushing;
+                        // this only keeps the deep-link stack in sync.
+                        if mgr.navArray.isEmpty {
+                            mgr.push(URL(fileURLWithPath: row.path))
+                        }
+                    })
                 }
             } header: {
                 HeaderLabel("Locations", symbol: "folder")
             } footer: {
                 Text("Airlift runs automatically on launch, so these directories can be read and edited.")
-            }
-
-            Section {
-                if !airlift.paired {
-                    Button {
-                        airlift.startPairing()
-                    } label: {
-                        ButtonLabel("Pair this device", symbol: "link")
-                    }
-                }
-
-                if !airlift.launchStatus.isEmpty {
-                    CompactAlert(
-                        title: "Airlift",
-                        symbol: airlift.isRunning ? "ellipsis" : "checkmark.circle",
-                        text: airlift.launchStatus,
-                        color: airlift.launchFailed ? .red : .accentColor
-                    )
-                } else {
-                    CompactAlert(
-                        title: "Airlift",
-                        symbol: airlift.paired ? "checkmark.circle" : "exclamationmark.triangle",
-                        text: airlift.paired ? "Paired — ready" : "Not paired",
-                        color: airlift.paired ? .green : .orange
-                    )
-                }
-            } header: {
-                HeaderLabel("Status", symbol: "info.circle")
-            }
-        }
-        .background {
-            NavigationLink(
-                destination: destView,
-                isActive: Binding(get: {
-                    mgr.navArray.count > 0
-                }, set: { newValue in
-                    if !newValue, mgr.navArray.count > 0 {
-                        mgr.navArray.removeSubrange(0...)
-                    }
-                })
-            ) {
-                EmptyView()
             }
         }
         .navigationTitle(AppInfo.appName)
@@ -124,23 +109,6 @@ struct RootLocationsView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView()
                 .environmentObject(mgr)
-        }
-    }
-
-    // The root list itself isn't a FileBrowserView, so the first pushed URL
-    // lives at navArray[0] and the container that shows it has to be level 1.
-    private var destView: some View {
-        Group {
-            if mgr.navArray.count > 0 {
-                FileBrowserContainer(level: 1, url: mgr.navArray[0].url)
-            } else {
-                VStack {
-                    HStack {
-                        ProgressView()
-                        Text("Loading...")
-                    }
-                }
-            }
         }
     }
 }

@@ -8,16 +8,12 @@
 //  (/var/mobile, /var/tmp, the 12 default targets) since the sandboxed
 //  FileManager cannot see them.
 //
-//  App containers used to be read through com.apple.mobile.house_arrest. AFC is
-//  jailed to /var/mobile/Media, and house_arrest only vends containers for
-//  apps that carry a developer profile, so that route showed `PermDenied` for
-//  most installed apps. `al_airlift_list_dir` replaces it with the AirManager
-//  trick: the Apple Books sync engine becomes a "move any object anywhere"
-//  primitive — the directory is pulled to `Airlock/Read/<token>`, listed, and
-//  pushed straight back — which needs neither house_arrest nor a signing
-//  profile. `usesAirliftMove(_:)` decides which path a directory takes; see
-//  `FileBrowserView.loadRemoteDirFiles` for why it is only armed for explicit
-//  navigation and never for a refresh reload.
+//  App containers are read back through InstallationProxy (`al_list_apps`) for
+//  the container root and com.apple.mobile.house_arrest (`al_house_*`) for
+//  everything inside one container; AppGroup and every other remote root stay
+//  on plain AFC (`al_dir_list`). The Books AirTraffic "move any object
+//  anywhere" route (`al_airlift_list_dir`) is still compiled on the Rust side
+//  but is unreachable from the browse UI — see `usesAirliftMove(_:)`.
 //
 //  All FFI calls are serialized on one queue (tunnel opens are not
 //  re-entrant) and the last directory listing is cached per path so rows
@@ -77,26 +73,35 @@ final class AirLiftBrowse {
         return AirLiftModel.defaultTargets.contains(where: { path == $0 || path.hasPrefix($0 + "/") })
     }
 
-    // MARK: - Airlift ATC move (no HouseArrest)
+    // MARK: - Airlift ATC move (disabled; diagnostic only)
 
-    /// Device roots that `al_airlift_list_dir` can read. They sit outside AFC's
-    /// `/var/mobile/Media` jail, so `al_dir_list` can never list them; these are
-    /// exactly the roots the Rust side accepts (`checked_pull_path`).
+    /// Device roots the Books ATC move could read while it was armed. They sit
+    /// outside AFC's `/var/mobile/Media` jail, and they are exactly the roots
+    /// the Rust side accepts (`checked_pull_path`).
+    ///
+    /// Kept for reference/diagnostics only — nothing in the browse path
+    /// consults this to route a listing any more (see `usesAirliftMove(_:)`).
     static let airliftMoveRoots: [String] = [
         "/var/mobile/Containers/Data/Application",
         "/var/mobile/Containers/Shared/AppGroup",
         "/var/mobile/Applications",
     ]
 
-    /// True when `path` has to be listed through the Books ATC move
-    /// (`al_airlift_list_dir`) rather than plain AFC (`al_dir_list`).
+    /// Always `false`: the ATC move is a diagnostic-only path.
     ///
-    /// This call *moves* the directory out to `Airlock/Read/<token>` and back
-    /// again, so it must only be made for a directory the user just navigated
-    /// into — never at launch, on a scroll, or on a refresh reload.
+    /// `al_airlift_list_dir` pulls the target directory out to
+    /// `Airlock/Read/<token>`, lists it there and pushes it back through a
+    /// restore symlink. On-device testing showed the Books asset state is
+    /// one-shot, so the first pull consumed it and every later read failed with
+    /// `ObjectNotFound`; the AirTraffic sync also spun the navigation in a loop
+    /// (a reappearing entry re-triggered a pull, which restored the directory
+    /// and re-armed the same entry). Both effects are device-state, not
+    /// recoverable here, so the route is disabled from the normal browse path.
+    /// App containers stay reachable through InstallationProxy
+    /// (`al_list_apps`) plus house_arrest (`al_house_*`), AppGroup and the rest
+    /// through AFC (`al_dir_list`).
     static func usesAirliftMove(_ path: String) -> Bool {
-        let normalized = normalizeDevicePath(path)
-        return airliftMoveRoots.contains { normalized == $0 || normalized.hasPrefix($0 + "/") }
+        return false
     }
 
     // MARK: - App container paths
@@ -231,41 +236,27 @@ final class AirLiftBrowse {
 
     // MARK: - Listing
 
-    /// List a remote directory.
+    /// List a remote directory over AFC.
     ///
-    /// Routes by what AFC can actually reach: app containers, App Groups and
-    /// `/var/mobile/Applications` go through `al_airlift_list_dir` (the Books
-    /// ATC pull/restore move, which returns the same `[{"name","is_dir","size"}]`
-    /// shape), everything else through `al_dir_list` over AFC.
+    /// AFC only — `al_airlift_list_dir` is never called from here. App
+    /// containers are served by `listApps()`/`houseList()` instead, and a path
+    /// AFC cannot reach reports its own error rather than being routed through
+    /// the Books ATC move (`usesAirliftMove(_:)` documents why that is off).
     ///
-    /// BLOCKS for several seconds on the ATC route (two AirTraffic syncs, plus a
-    /// `Books.plist` snapshot/restore) — it is only ever called from an
-    /// explicit directory navigation. Callers must not invoke it for a refresh
-    /// reload; `usesAirliftMove(_:)` is the routing predicate and
-    /// `FileBrowserView` gates the ATC branch on that.
-    ///
-    /// - Throws: the FFI error string when the tunnel, the AFC listing or the
-    ///   ATC move failed. Callers must surface it rather than fall back to
+    /// - Throws: the FFI error string when the tunnel or the AFC listing
+    ///   failed. Callers must surface it rather than fall back to
     ///   `FileManager` — the sandboxed `FileManager` cannot see these paths at
     ///   all, so its failure (code 257) is meaningless and its "no permission"
     ///   copy actively misleads.
     func listDir(_ path: String) -> Result<[RemoteEntry], String> {
-        // App containers / App Groups / /var/mobile/Applications live outside
-        // AFC's /var/mobile/Media root. Listing them needs the Books ATC move,
-        // which is why they no longer go through house_arrest.
-        let usesMove = Self.usesAirliftMove(path)
-        let api = usesMove ? "al_airlift_list_dir" : "al_dir_list"
+        let api = "al_dir_list"
         let pairingPath = PairingController.pairingFilePath()
         let raw = queue.sync { () -> Result<String, String> in
             var outJSON: UnsafeMutablePointer<CChar>?
             var outError: UnsafeMutablePointer<CChar>?
             let rc = pairingPath.withCString { pairC in
                 path.withCString { pathC in
-                    if usesMove {
-                        return al_airlift_list_dir(pairC, pathC, airLiftLogCallback, nil, &outJSON, &outError)
-                    } else {
-                        return al_dir_list(pairC, pathC, airLiftLogCallback, nil, &outJSON, &outError)
-                    }
+                    al_dir_list(pairC, pathC, airLiftLogCallback, nil, &outJSON, &outError)
                 }
             }
             let json = outJSON.flatMap { String(validatingUTF8: $0) }
@@ -308,10 +299,11 @@ final class AirLiftBrowse {
     /// Finish every pull that is still parked in `Airlock/Read` — the recovery
     /// half of the ATC move (`al_airlift_recover`).
     ///
-    /// A `listDir` that fails after the directory has already been pulled
-    /// reports `kept at Airlock/Read/<token>; retry or call al_airlift_recover`;
-    /// calling this replays the restore step for each such record, so the
-    /// device is left with the original directory in place.
+    /// No browse path arms the ATC move any more (`usesAirliftMove(_:)`), so
+    /// this is only useful for cleaning up after a diagnostic run that was
+    /// interrupted: a pull that failed after moving the directory reports
+    /// `kept at Airlock/Read/<token>; retry or call al_airlift_recover`, and
+    /// calling this replays the restore step for each such record.
     ///
     /// Returns the raw JSON array of per-path results
     /// (`[{"target":…,"token":…,"status":"restored"|"failed"|"missing"…, …}]`)

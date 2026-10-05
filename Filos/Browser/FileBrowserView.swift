@@ -306,8 +306,9 @@ struct FileBrowserView: View {
             mgr.refreshFiles.toggle()
         }
         .onAppear {
-            // Explicit navigation into this directory: the one case where an
-            // AirTraffic sync (the ATC move) may run.
+            // Enumeration goes through AFC / InstallationProxy / house_arrest
+            // only — the ATC move is disabled, so this blocks no longer than a
+            // plain tunnel listing and stays off the main thread regardless.
             DispatchQueue.global(qos: .userInitiated).async {
                 loadDirFiles(allowAirliftMove: true)
             }
@@ -326,8 +327,8 @@ struct FileBrowserView: View {
             dirFiles = sortFiles(files: dirFiles)
         }
         .onChange(of: mgr.refreshFiles) { _ in
-            // Pull-to-refresh must never start an AirTraffic sync, so the ATC
-            // move branch is disarmed here — it serves the cached listing.
+            // Pull-to-refresh re-runs the same AFC / InstallationProxy /
+            // house_arrest listing as a navigation. No ATC sync either way.
             DispatchQueue.global(qos: .userInitiated).async {
                 loadDirFiles(allowAirliftMove: false)
             }
@@ -335,6 +336,9 @@ struct FileBrowserView: View {
     }
     
     // MARK: handle files
+    /// `allowAirliftMove` is accepted and ignored: the ATC move is disabled
+    /// (`AirLiftBrowse.usesAirliftMove(_:)` is always `false`), so a reload and a
+    /// fresh navigation take the same AFC/InstallationProxy route.
     private func loadDirFiles(allowAirliftMove: Bool = true) {
         let path = item.fileURL.path
 
@@ -354,21 +358,40 @@ struct FileBrowserView: View {
     ///   * `/var/mobile/Containers/Data/Application` — InstallationProxy knows
     ///     every installed app's container directory, so the listing comes from
     ///     `al_list_apps` instead of a UUID-directory AFC guess.
-    ///   * anything else under an app container, an App Group or
-    ///     `/var/mobile/Applications` — `al_airlift_list_dir`. AFC is jailed to
-    ///     `/var/mobile/Media` and house_arrest only vends containers for apps
-    ///     with a developer profile, so the Books ATC move (pull the directory
-    ///     to `Airlock/Read/<token>`, list it, push it back) is what makes these
-    ///     rows appear at all.
-    ///   * everything else (`/var/mobile/Library/…`, `/var/tmp`) — plain AFC, as
-    ///     before.
+    ///   * anything inside one of those containers —
+    ///     `com.apple.mobile.house_arrest` (`al_house_list`) vends the
+    ///     container as its own AFC channel, which is the only thing that can
+    ///     open it.
+    ///   * everything else (`/var/mobile/Library/…`, AppGroup, `/var/tmp`) —
+    ///     plain AFC (`al_dir_list`), as before.
+    ///
+    /// The Books ATC move (`al_airlift_list_dir`) is not reachable from here
+    /// at all: `usesAirliftMove(_:)` is `false` for every path, and `allowAirliftMove`
+    /// no longer arms anything.
     private func loadRemoteDirFiles(path: String, allowAirliftMove: Bool) {
         if AirLiftBrowse.isAppContainerRoot(path) {
             loadAppContainerRoot(path: path)
             return
         }
-        if AirLiftBrowse.usesAirliftMove(path) {
-            loadAirliftMoveDirectory(path: path, allowAirliftMove: allowAirliftMove)
+        if AirLiftBrowse.isInsideAppContainerRoot(path) {
+            // Resolving a container to a bundle id needs the app index. Populate
+            // it on a cold start (deep link straight into a container), then
+            // re-resolve.
+            if AirLiftBrowse.shared.cachedApps() == nil {
+                _ = AirLiftBrowse.shared.listApps()
+            }
+            if let info = AirLiftBrowse.shared.containerInfo(forDevicePath: path) {
+                loadContainerDirectory(path: path, bundleId: info.bundleId, relativePath: info.relativePath)
+                return
+            }
+            // Under the container root but not one of the known containers: a
+            // container that was deleted underneath us, or an app hidden from
+            // InstallationProxy. House arrest cannot address it — say so rather
+            // than blaming AFC.
+            let message = "No installed app owns \(path). The container may have been deleted, or its app is hidden from InstallationProxy."
+            print("[!] \(message)")
+            localizedError = message
+            currentState = .unknownError
             return
         }
         loadAFCDirectory(path: path)
@@ -388,42 +411,27 @@ struct FileBrowserView: View {
         }
     }
 
-    /// An app container, App Group or `/var/mobile/Applications` directory, via
-    /// the Books ATC move (`al_airlift_list_dir`).
-    ///
-    /// `allowAirliftMove` is false for a refresh reload: the ATC route moves the
-    /// directory on the device (out to `Airlock/Read/<token>` and back), which is
-    /// only ever acceptable for an explicit navigation into a directory. A
-    /// reload therefore reuses the cached listing and says so when there is
-    /// none, instead of mutating the device behind the user's back.
-    private func loadAirliftMoveDirectory(path: String, allowAirliftMove: Bool) {
-        guard allowAirliftMove else {
-            if let cached = AirLiftBrowse.shared.cachedListing(for: path) {
-                print("[airlift] reload of \(path) served from the cached listing (no ATC move)")
-                applyRemoteListing(cached)
-                return
-            }
-            let message = "Pull-to-refresh does not re-list \(path): reading it means moving the directory out and back with the AirTraffic sync. Leave this screen and open it again to reload it."
-            print("[!] \(message)")
-            localizedError = message
+    /// A directory inside one app's Data container, via house_arrest
+    /// (`al_house_list`).
+    private func loadContainerDirectory(path: String, bundleId: String, relativePath: String) {
+        switch AirLiftBrowse.shared.houseList(bundleId: bundleId, path: relativePath) {
+        case .success(let entries):
+            applyRemoteListing(entries)
+        case .failure(let error):
+            print("[!] house_arrest listing failed for \(bundleId)\(relativePath): \(error)")
+            localizedError = "Could not open \(bundleId) through house_arrest:\n\(error)"
             currentState = .unknownError
-            return
         }
-
-        // The listing itself is what pulls, reads and restores the directory, so
-        // this call blocks for seconds — it must stay on a background thread.
-        print("[airlift] listing \(path) through al_airlift_list_dir (Books ATC move)")
-        handleRemoteListing(path: path, result: AirLiftBrowse.shared.listDir(path))
     }
 
-    /// Every other remote path — plain AFC over the same tunnel.
+    /// Every other remote path — plain AFC (`al_dir_list`) over the same tunnel.
     private func loadAFCDirectory(path: String) {
         handleRemoteListing(path: path, result: AirLiftBrowse.shared.listDir(path))
     }
 
-    /// Shared success/error handling for both remote listing routes. Never
-    /// falls back to `FileManager`: it cannot see these paths, and its sandbox
-    /// error would be a misleading "no permission".
+    /// Success/error handling for the AFC listing route. Never falls back to
+    /// `FileManager`: it cannot see these paths, and its sandbox error would be
+    /// a misleading "no permission".
     private func handleRemoteListing(path: String, result: Result<[RemoteEntry], String>) {
         switch result {
         case .success(let entries):
