@@ -39,7 +39,7 @@ const MAX_WRITE_BYTES: usize = 16 * 1024 * 1024;
 /// One remote tunnel open at a time.
 static TUNNEL_LOCK: Mutex<()> = Mutex::new(());
 
-fn lock_tunnel(name: &str) -> MutexGuard<'static, ()> {
+pub(crate) fn lock_tunnel(name: &str) -> MutexGuard<'static, ()> {
     match TUNNEL_LOCK.lock() {
         Ok(guard) => guard,
         // A previous holder panicked; the tunnel it opened is long gone, so the
@@ -336,7 +336,7 @@ fn normalize_container_path(path: &str) -> String {
     }
 }
 
-async fn list_dir_json(afc: &mut AfcClient, path: &str) -> Result<String, String> {
+pub(crate) async fn list_dir_json(afc: &mut AfcClient, path: &str) -> Result<String, String> {
     let names = afc
         .list_dir(path.to_owned())
         .await
@@ -810,7 +810,7 @@ pub unsafe fn house_delete(
 // Result plumbing (mirrors exploit.rs: 0 on success, 1 on error)
 // ---------------------------------------------------------------------------
 
-fn finish_string_result(
+pub(crate) fn finish_string_result(
     res: Result<Result<String, String>, String>,
     name: &str,
     out_value: *mut *mut c_char,

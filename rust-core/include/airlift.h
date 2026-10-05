@@ -216,6 +216,47 @@ int32_t al_house_delete(const char *pairing_path,
                         char **out_error);
 
 // ---------------------------------------------------------------------------
+// Airlift pull/restore listing (AirManager's ATC move trick, no HouseArrest)
+// ---------------------------------------------------------------------------
+
+// List a directory anywhere under an app container *without* HouseArrest.
+//
+// The Apple Books sync engine is used as a "move any object anywhere"
+// primitive: Books.plist declares the target, one FileComplete pulls it to
+// Airlock/Read/<T> where ordinary AFC can see it, then a second ATC session
+// pushes it back through a symlink pointing at the real parent directory.
+//
+// `path` must be a real device path under
+//   /var/mobile/Containers/Data/Application/
+//   /var/mobile/Containers/Shared/AppGroup/
+//   /var/mobile/Applications
+// ".." is refused. out_json receives exactly what al_dir_list emits:
+// [{"name":…,"is_dir":…,"size":…}, …]
+//
+// BLOCKS for several seconds (two ATC syncs) — run it off the main thread, for
+// the directory the user explicitly opened. Never call it at launch or from a
+// scroll handler.
+//
+// On a failure after the pull has succeeded, out_error contains
+// "kept at Airlock/Read/<T>"; call al_airlift_recover to finish it.
+int32_t al_airlift_list_dir(const char *pairing_path,
+                            const char *path,
+                            ALLogCallback log_cb,
+                            void *ctx,
+                            char **out_json,
+                            char **out_error);
+
+// Finish every pull still parked in Airlock/Read (an interrupted
+// al_airlift_list_dir), staging a fresh restore symlink per recovery record.
+// Best-effort per path; out_json receives
+// [{"target":…,"token":…,"status":"restored"|"failed"|"missing"…, …}].
+int32_t al_airlift_recover(const char *pairing_path,
+                           ALLogCallback log_cb,
+                           void *ctx,
+                           char **out_json,
+                           char **out_error);
+
+// ---------------------------------------------------------------------------
 // Syslog Stream / Live Card Detection
 // ---------------------------------------------------------------------------
 

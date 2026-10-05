@@ -10,10 +10,14 @@
 //!   al_list_apps           — list installed apps + their container paths
 //!   al_house_list/files/write/delete — browse one app's Data container via
 //!                             com.apple.mobile.house_arrest (VendContainer)
+//!   al_airlift_list_dir    — list a real device directory through the Books
+//!                             ATC "move" trick (pull + restore), no HouseArrest
+//!   al_airlift_recover     — finish an interrupted al_airlift_list_dir pull
 //!   al_string_free         — free any char* returned by this library
 
 use std::ffi::{c_char, c_void};
 
+pub mod airlift_dir;
 pub mod browse;
 pub mod exploit;
 pub mod ffi_util;
@@ -467,6 +471,84 @@ pub unsafe extern "C" fn al_house_delete(
         Err(e) => {
             if !out_error.is_null() {
                 *out_error = ffi_util::cstr(format!("Rust panic in al_house_delete: {e:?}"));
+            }
+            1
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Airlift pull/restore listing (AirManager's ATC move trick, no HouseArrest)
+// ---------------------------------------------------------------------------
+
+/// List a directory anywhere under an app container *without* HouseArrest.
+///
+/// The Apple Books sync engine is used as a "move any object anywhere"
+/// primitive: `Books/Sync/Books.plist` declares the target, one `FileComplete`
+/// pulls it to `Airlock/Read/<T>` where ordinary AFC can see it, a second ATC
+/// session pushes it back through a symlink that points at the real parent.
+/// `out_json` is exactly what `al_dir_list` emits:
+/// `[{"name":…,"is_dir":…,"size":…}, …]`.
+///
+/// `path` must be a real device path under
+/// `/var/mobile/Containers/Data/Application/`,
+/// `/var/mobile/Containers/Shared/AppGroup/` or `/var/mobile/Applications`.
+///
+/// BLOCKS for several seconds (two ATC syncs) — never call it from the main
+/// thread, at app launch, or from a scroll handler. It is only ever meant to be
+/// invoked explicitly for the directory the user is looking at.
+///
+/// On a failure after the pull has succeeded, `out_error` contains
+/// `kept at Airlock/Read/<T>` so the caller can offer `al_airlift_recover`.
+///
+/// # Safety
+/// All pointer arguments must be null or valid for their documented use.
+#[no_mangle]
+pub unsafe extern "C" fn al_airlift_list_dir(
+    pairing_path: *const c_char,
+    path: *const c_char,
+    log_cb: exploit::ALLogCallback,
+    ctx: *mut c_void,
+    out_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        airlift_dir::list_dir(pairing_path, path, log_cb, ctx, out_json, out_error)
+    }));
+    match res {
+        Ok(rc) => rc,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = ffi_util::cstr(format!("Rust panic in al_airlift_list_dir: {e:?}"));
+            }
+            1
+        }
+    }
+}
+
+/// Finish every pull that is still parked in `Airlock/Read` (an interrupted
+/// `al_airlift_list_dir`), staging a fresh restore symlink for each recovery
+/// record. Best-effort per path. `out_json` receives
+/// `[{"target":…,"token":…,"status":"restored"|"failed"|"missing"…, …}]`.
+///
+/// # Safety
+/// All pointer arguments must be null or valid for their documented use.
+#[no_mangle]
+pub unsafe extern "C" fn al_airlift_recover(
+    pairing_path: *const c_char,
+    log_cb: exploit::ALLogCallback,
+    ctx: *mut c_void,
+    out_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        airlift_dir::recover(pairing_path, log_cb, ctx, out_json, out_error)
+    }));
+    match res {
+        Ok(rc) => rc,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = ffi_util::cstr(format!("Rust panic in al_airlift_recover: {e:?}"));
             }
             1
         }
