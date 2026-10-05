@@ -877,6 +877,149 @@ fn kept_at_error(token: &str, reason: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Staging observation (bounded retries)
+//
+// The Books daemon applies a `FileComplete` move *asynchronously*: on device
+// `Airlock/Read/<T>` only became listable about two seconds after the ATC
+// session had finished, and a nested pull reported a bare
+// `Afc(ObjectNotFound)` when checked immediately. A single immediate check
+// therefore proves nothing, and — much worse — treating it as proof of failure
+// used to skip STEP C entirely and strand the real directory in the staging
+// area. Everything below exists so that "not there yet" is never mistaken for
+// "not moved".
+// ---------------------------------------------------------------------------
+
+/// How many times `Airlock/Read/<T>` is re-listed after STEP B, and how long to
+/// wait between attempts: 10 × 500 ms ≈ 5 s of grace.
+const STAGING_POLL_ATTEMPTS: usize = 10;
+const STAGING_POLL_INTERVAL: Duration = Duration::from_millis(500);
+/// Shorter poll after STEP C — that move is already under way.
+const RESTORE_POLL_ATTEMPTS: usize = 4;
+
+/// Make sure the pull's destination parent exists before STEP B.
+///
+/// The move writes to `<dest>`, so a missing `Airlock/Read` means the pull has
+/// nowhere to land. `mk_dir` failures are logged rather than fatal (the directory
+/// usually exists and AFC answers "already exists"), and the follow-up
+/// `get_file_info` turns a genuinely unusable staging area into one clear log
+/// line instead of a mysterious `ObjectNotFound` later on.
+async fn ensure_read_dir(afc: &mut AfcClient, logger: &Logger) {
+    for dir in ["Airlock", AIRLOCK_READ] {
+        if let Err(e) = afc.mk_dir(dir).await {
+            logger.log(format!(
+                "airlift: mk_dir({dir}) reported {e:?} (an existing directory is fine)"
+            ));
+        }
+    }
+    match afc.get_file_info(AIRLOCK_READ).await {
+        Ok(info) => logger.log(format!(
+            "airlift: staging parent {AIRLOCK_READ} is ready ({})",
+            info.st_ifmt
+        )),
+        Err(e) => logger.log(format!(
+            "airlift: warning: {AIRLOCK_READ} is still not visible after mk_dir ({e:?}); the pull may have no destination"
+        )),
+    }
+}
+
+/// Poll `Airlock/Read/<T>` until it lists. The listing *is* the verification of
+/// STEP B — a directory AFC can list is a directory the daemon moved.
+///
+/// Returns the listing JSON, or the last AFC error after every attempt failed.
+async fn wait_for_staged_listing(
+    afc: &mut AfcClient,
+    read_dir: &str,
+    logger: &Logger,
+) -> Result<String, String> {
+    let mut last_error = String::from("no listing attempt was made");
+    for attempt in 1..=STAGING_POLL_ATTEMPTS {
+        match list_dir_json(afc, read_dir).await {
+            Ok(json) => {
+                logger.log(format!(
+                    "airlift: {read_dir} listed on attempt {attempt}/{STAGING_POLL_ATTEMPTS}"
+                ));
+                return Ok(json);
+            }
+            Err(e) => {
+                last_error = e;
+                logger.log(format!(
+                    "airlift: {read_dir} not listable yet ({attempt}/{STAGING_POLL_ATTEMPTS}): {last_error}"
+                ));
+                if attempt < STAGING_POLL_ATTEMPTS {
+                    tokio::time::sleep(STAGING_POLL_INTERVAL).await;
+                }
+            }
+        }
+    }
+    Err(last_error)
+}
+
+/// Bounded existence re-check for the staged copy. `false` means the daemon is
+/// done with `read_dir` — either it never arrived, or it was moved back.
+async fn staging_present(
+    afc: &mut AfcClient,
+    read_dir: &str,
+    attempts: usize,
+    logger: &Logger,
+) -> bool {
+    for attempt in 1..=attempts {
+        if afc.get_file_info(read_dir.to_owned()).await.is_ok() {
+            return true;
+        }
+        if attempt < attempts {
+            tokio::time::sleep(STAGING_POLL_INTERVAL).await;
+        }
+    }
+    logger.log(format!(
+        "airlift: {read_dir} is absent after {attempts} check(s)"
+    ));
+    false
+}
+
+/// What the state after STEP C means. Pure, so the decision table is
+/// unit-tested instead of only being reachable on a paired device.
+#[derive(Debug, PartialEq, Eq)]
+enum RestoreOutcome {
+    /// The directory is back where it came from — return the listing.
+    Restored,
+    /// The staged copy is gone and STEP B never produced one, so STEP C had
+    /// nothing to restore. Report the original STEP B reason (there is no
+    /// `kept at …` copy to point at).
+    NothingWasStaged,
+    /// The staged copy is still parked. Keep it, keep its recovery record and
+    /// tell the caller to run `al_airlift_recover`.
+    StillStaged,
+    /// The staged copy is gone but the restore destination was never confirmed.
+    GoneUnconfirmed,
+}
+
+/// Decide the outcome from what the device reported.
+///
+/// Ordering matters: a still-present staged copy always wins, because it is the
+/// only thing that can still be lost. `step_c_ok` deliberately does *not* gate
+/// success — the observed device behaviour was that the move completed even
+/// though the session reported an error, so "session said no" plus "staging is
+/// gone" plus "destination exists" is still a restore.
+fn classify_restore(
+    step_b_ok: bool,
+    step_c_ok: bool,
+    staging_present: bool,
+    destination_present: bool,
+) -> RestoreOutcome {
+    let _ = step_c_ok;
+    if staging_present {
+        return RestoreOutcome::StillStaged;
+    }
+    if !step_b_ok {
+        return RestoreOutcome::NothingWasStaged;
+    }
+    if destination_present {
+        return RestoreOutcome::Restored;
+    }
+    RestoreOutcome::GoneUnconfirmed
+}
+
+// ---------------------------------------------------------------------------
 // STEP A/B/C/D driver
 // ---------------------------------------------------------------------------
 
@@ -925,12 +1068,23 @@ async fn pull_list_and_restore(
     }
 
     // ── STEP B: pull the directory into Airlock/Read/<T> (one ATC session) ──
+    //
+    // From here on there is NO early return: once the sync has been submitted
+    // the daemon owns the move and may complete it even when the session
+    // reports an error. Skipping STEP C on the first `ObjectNotFound` is what
+    // stranded real app data in the staging area, so every exit below happens
+    // *after* a restore attempt.
+    ensure_read_dir(&mut afc, logger).await;
+
     if let Err(e) = write_books_plist(&mut afc, std::slice::from_ref(&asset_id_pull), logger).await {
+        // The manifest never landed, so the daemon has nothing to act on and
+        // nothing was moved. This is the one safe early exit in STEP B.
         let _ = afc.remove_all(pull_dir.clone()).await;
         let _ = backup.restore(&mut afc, logger).await;
         return Err(format!("STEP B manifest failed: {e}"));
     }
-    if let Err(e) = atc_asset_sync(
+
+    let step_b_sync_error = match atc_asset_sync(
         &mut tunnel,
         &[asset_id_pull],
         &[read_dir.clone()],
@@ -939,49 +1093,39 @@ async fn pull_list_and_restore(
     )
     .await
     {
-        // The daemon may still have moved the directory even though the session
-        // reported an error, so check before touching anything.
-        let record = RecoveryRecord {
-            target: target_abs.to_owned(),
-            token: token.clone(),
-            basename: basename.clone(),
-            parent: parent.clone(),
-        };
-        if afc.get_file_info(read_dir.clone()).await.is_ok() {
-            let _ = write_recovery_record(&mut afc, &record, logger).await;
-        }
-        let _ = afc.remove_all(pull_dir.clone()).await;
-        let _ = afc.remove_all(link_dest.clone()).await;
-        let _ = backup.restore(&mut afc, logger).await;
-        return Err(format!("STEP B pull failed: {e}"));
-    }
-
-    // The listing *is* the verification: if Airlock/Read/<T> is listable, the
-    // pull landed.
-    let listing = match list_dir_json(&mut afc, &read_dir).await {
-        Ok(json) => json,
+        Ok(()) => None,
         Err(e) => {
-            let record = RecoveryRecord {
-                target: target_abs.to_owned(),
-                token: token.clone(),
-                basename: basename.clone(),
-                parent: parent.clone(),
-            };
-            if afc.get_file_info(read_dir.clone()).await.is_ok() {
-                let _ = write_recovery_record(&mut afc, &record, logger).await;
-            }
-            let _ = backup.restore(&mut afc, logger).await;
-            return Err(format!(
-                "STEP B: {read_dir} is not listable after the pull ({e}); target '{target_abs}' may still be in place"
+            logger.log(format!(
+                "airlift: STEP B sync reported an error ({e}); continuing to the staged-listing retry and then to STEP C, because the daemon may still have moved the directory"
             ));
+            Some(format!("STEP B pull failed: {e}"))
         }
     };
-    logger.log(format!("airlift: STEP B pulled '{target_abs}' to {read_dir}"));
-    if listing == "[]" {
-        logger.log(format!(
-            "airlift: STEP B listing of {read_dir} is empty — the target directory was empty, or the daemon created an empty directory instead of moving it; restoring it back either way"
-        ));
-    }
+
+    // ── STEP B verification: bounded retry (the listing IS the check) ──
+    let listed = wait_for_staged_listing(&mut afc, &read_dir, logger).await;
+    let step_b_ok = listed.is_ok();
+    let listing = match listed {
+        Ok(json) => {
+            logger.log(format!("airlift: STEP B pulled '{target_abs}' to {read_dir}"));
+            if json == "[]" {
+                logger.log(format!(
+                    "airlift: STEP B listing of {read_dir} is empty — the target directory was empty, or the daemon created an empty directory instead of moving it; restoring it back either way"
+                ));
+            }
+            Some(json)
+        }
+        Err(e) => {
+            logger.log(format!(
+                "airlift: STEP B: {read_dir} never became listable after {STAGING_POLL_ATTEMPTS} attempts ({e})"
+            ));
+            None
+        }
+    };
+    // Kept only for the final error text — STEP C runs either way.
+    let step_b_reason = step_b_sync_error
+        .clone()
+        .unwrap_or_else(|| format!("{read_dir} was not listable after the pull"));
 
     // ── STEP D (first half): restore the sync state, then the recovery record ──
     // The STEP C manifest is written below anyway, so a restore problem here is
@@ -993,7 +1137,9 @@ async fn pull_list_and_restore(
     }
 
     // The recovery record has to be on disk *before* the restore is attempted,
-    // otherwise an interrupted restore is unrecoverable.
+    // otherwise an interrupted restore is unrecoverable. It is written whether
+    // or not STEP B produced a staged copy: if the process dies mid-STEP-C this
+    // record is what lets al_airlift_recover finish the job.
     let record = RecoveryRecord {
         target: target_abs.to_owned(),
         token: token.clone(),
@@ -1011,8 +1157,13 @@ async fn pull_list_and_restore(
         ));
     }
 
-    // ── STEP C: restore (two FileCompletes in ONE session, symlink first) ──
-    let restore_result = async {
+    // ── STEP C restore (two FileCompletes in ONE session, symlink first) ──
+    //
+    // Attempted unconditionally. Whether STEP B reported success or not, this is
+    // the only thing that can put a moved directory back, so "attempt the
+    // restore and find it unnecessary" always beats "skip it and hope nothing
+    // moved".
+    let step_c_result = async {
         write_books_plist(
             &mut afc,
             &[asset_id_link.clone(), asset_id_read.clone()],
@@ -1029,41 +1180,87 @@ async fn pull_list_and_restore(
         .await
     }
     .await;
+    let step_c_ok = match step_c_result {
+        Ok(()) => true,
+        Err(e) => {
+            // Not fatal by itself: the FileCompletes may have been applied before
+            // the session gave up. The staging re-check below decides.
+            logger.log(format!(
+                "airlift: STEP C reported an error ({e}); re-checking whether the staged copy moved back"
+            ));
+            false
+        }
+    };
 
-    if let Err(e) = restore_result {
-        let _ = afc.remove_all(pull_dir.clone()).await;
-        let _ = backup.restore(&mut afc, logger).await;
-        return Err(kept_at_error(&token, &format!("STEP C restore failed: {e}")));
-    }
-
-    // Only delete the parked copy once AFC confirms it is back at the link
-    // destination. A restore that silently created an empty destination would
-    // otherwise destroy the target's contents.
+    // ── STEP D (second half): classify what actually happened ──
+    //
+    // The staging area is re-checked *after* STEP C, never before: the daemon
+    // owns both moves, and only this ordering can tell "restored" apart from
+    // "still parked".
+    let still_staged = staging_present(&mut afc, &read_dir, RESTORE_POLL_ATTEMPTS, logger).await;
     let restored = format!("{link_dest}/{basename}");
-    if afc.get_file_info(restored.clone()).await.is_err() {
-        logger.log(format!(
-            "airlift: STEP C did not place {basename} at {restored}; leaving the parked copy in place"
-        ));
-        let _ = afc.remove_all(pull_dir.clone()).await;
-        let _ = backup.restore(&mut afc, logger).await;
-        return Err(kept_at_error(
-            &token,
-            &format!("restore destination {restored} was not created"),
-        ));
-    }
+    let destination_present = afc.get_file_info(restored.clone()).await.is_ok();
 
-    // ── STEP D (second half): cleanup + Books sync-state restore ────────────
-    remove_quietly(&mut afc, &read_dir, logger).await;
-    remove_quietly(&mut afc, &record_path, logger).await;
-    remove_quietly(&mut afc, &pull_dir, logger).await;
-    remove_quietly(&mut afc, &link_dest, logger).await;
-    let restore_err = backup.restore(&mut afc, logger).await.err();
-
-    logger.log(format!("airlift: '{target_abs}' restored and staging cleaned up"));
-    if let Some(e) = restore_err {
-        logger.log(format!("airlift: warning: {e}"));
+    match classify_restore(step_b_ok, step_c_ok, still_staged, destination_present) {
+        RestoreOutcome::StillStaged => {
+            // Keep the staged copy *and* its recovery record: deleting either
+            // here is the data-loss bug. Only our own scaffolding goes.
+            let _ = afc.remove_all(pull_dir.clone()).await;
+            remove_quietly(&mut afc, &link_dest, logger).await;
+            let _ = backup.restore(&mut afc, logger).await;
+            let reason = match (step_c_ok, &step_b_sync_error) {
+                (true, _) => step_b_reason.clone(),
+                (false, Some(e)) => format!("{e}; STEP C restore also failed"),
+                (false, None) => format!("{step_b_reason}; STEP C restore also failed"),
+            };
+            Err(kept_at_error(&token, &reason))
+        }
+        RestoreOutcome::NothingWasStaged => {
+            // Nothing was ever moved, so STEP C had nothing to do — the restore
+            // legitimately found no work. Clean up and report STEP B's reason
+            // instead of pointing at a "kept at" copy that does not exist.
+            logger.log(format!(
+                "airlift: STEP C found nothing to restore ({read_dir} was never created); reporting the STEP B failure"
+            ));
+            remove_quietly(&mut afc, &read_dir, logger).await;
+            remove_quietly(&mut afc, &record_path, logger).await;
+            remove_quietly(&mut afc, &pull_dir, logger).await;
+            remove_quietly(&mut afc, &link_dest, logger).await;
+            let _ = backup.restore(&mut afc, logger).await;
+            Err(step_b_reason)
+        }
+        RestoreOutcome::GoneUnconfirmed => {
+            // The staged copy is gone but the destination was never confirmed:
+            // either the daemon moved it somewhere unexpected or the restore
+            // silently did nothing. There is nothing left to keep, so say that
+            // plainly rather than claiming the data is parked and recoverable.
+            let _ = afc.remove_all(pull_dir.clone()).await;
+            remove_quietly(&mut afc, &link_dest, logger).await;
+            let _ = backup.restore(&mut afc, logger).await;
+            Err(format!(
+                "STEP C: {read_dir} is gone but {restored} was never created; the directory may have been moved somewhere unexpected — re-open it and check"
+            ))
+        }
+        RestoreOutcome::Restored => {
+            remove_quietly(&mut afc, &read_dir, logger).await;
+            remove_quietly(&mut afc, &record_path, logger).await;
+            remove_quietly(&mut afc, &pull_dir, logger).await;
+            remove_quietly(&mut afc, &link_dest, logger).await;
+            let restore_err = backup.restore(&mut afc, logger).await.err();
+            if !step_c_ok {
+                logger.log(format!(
+                    "airlift: STEP C reported an error but {read_dir} is gone and {restored} exists; treating it as restored"
+                ));
+            }
+            logger.log(format!(
+                "airlift: '{target_abs}' restored and staging cleaned up"
+            ));
+            if let Some(e) = restore_err {
+                logger.log(format!("airlift: warning: {e}"));
+            }
+            Ok(listing.unwrap_or_else(|| "[]".to_owned()))
+        }
     }
-    Ok(listing)
 }
 
 // ---------------------------------------------------------------------------
@@ -1476,5 +1673,96 @@ mod tests {
         let message = super::kept_at_error("deadbeef", "boom");
         assert!(message.contains("kept at Airlock/Read/deadbeef"));
         assert!(message.contains("al_airlift_recover"));
+    }
+
+    // -- post-STEP-C decision table ------------------------------------------
+    //
+    // These pin the rule that made the data-loss report possible: a STEP B
+    // failure is never allowed to end the run. Whatever STEP B reported, the
+    // driver always submits STEP C, and only what the device reports *after*
+    // that decides the outcome.
+    #[test]
+    fn restore_classification_never_loses_a_staged_copy() {
+        use super::{classify_restore, RestoreOutcome};
+
+        // Staged copy still there → keep it and tell the caller, whatever the
+        // sessions said.
+        for step_c_ok in [true, false] {
+            assert_eq!(
+                classify_restore(true, step_c_ok, true, true),
+                RestoreOutcome::StillStaged
+            );
+            assert_eq!(
+                classify_restore(true, step_c_ok, true, false),
+                RestoreOutcome::StillStaged
+            );
+        }
+        // STEP B failed and nothing was staged → STEP C found no work; report
+        // STEP B's reason rather than a "kept at" copy that does not exist.
+        assert_eq!(
+            classify_restore(false, true, false, false),
+            RestoreOutcome::NothingWasStaged
+        );
+        assert_eq!(
+            classify_restore(false, true, false, true),
+            RestoreOutcome::NothingWasStaged
+        );
+        // STEP B succeeded, staging drained, destination confirmed → restored.
+        assert_eq!(
+            classify_restore(true, true, false, true),
+            RestoreOutcome::Restored
+        );
+        // Observed on device: the move completed even though the session
+        // reported an error. Staging gone + destination present still wins.
+        assert_eq!(
+            classify_restore(true, false, false, true),
+            RestoreOutcome::Restored
+        );
+        // Staging drained with no destination anywhere → cannot claim success
+        // and cannot claim it is recoverable.
+        assert_eq!(
+            classify_restore(true, true, false, false),
+            RestoreOutcome::GoneUnconfirmed
+        );
+    }
+
+    /// Regression guard for the reported data loss ("lost app data / apps
+    /// logged out"): the code between the STEP B verification and STEP C must
+    /// not contain an early `return Err` driven by the pull check — that is
+    /// exactly the path that stranded a moved directory in `Airlock/Read`.
+    ///
+    /// The one `return Err` that is allowed there is the recovery-record
+    /// guard, which sits *after* `write_recovery_record` and is not a STEP B
+    /// verdict. STEP C is submitted unconditionally; only the post-STEP-C
+    /// `classify_restore` decides what the caller is told.
+    #[test]
+    fn step_b_verification_never_short_circuits_step_c() {
+        let source = include_str!("airlift_dir.rs");
+        let start = source
+            .find("STEP B verification: bounded retry")
+            .expect("STEP B verification marker");
+        let end = source
+            .find("STEP C restore (two FileCompletes in ONE session")
+            .expect("STEP C marker");
+        assert!(start < end, "the STEP B verification must precede STEP C");
+        let between = &source[start..end];
+
+        assert!(
+            between.contains("wait_for_staged_listing"),
+            "STEP B must verify through the retrying listing helper"
+        );
+        assert!(
+            !between.contains("list_dir_json"),
+            "STEP B must not do a single-shot list_dir_json check again"
+        );
+        let returns = between.matches("return Err").count();
+        assert_eq!(
+            returns, 1,
+            "exactly one early return may live between STEP B and STEP C (the recovery-record guard), found {returns}"
+        );
+        assert!(
+            between.find("write_recovery_record").unwrap() < between.find("return Err").unwrap(),
+            "the only early return must be the one guarding write_recovery_record"
+        );
     }
 }
