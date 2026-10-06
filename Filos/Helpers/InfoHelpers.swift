@@ -97,7 +97,7 @@ func appRowLabels(url: URL) -> (title: String, subtitle: String?) {
         if AirLiftBrowse.isRemotePath(url.path) {
             // Cached InstallationProxy entry only — no plist probe on render.
             if let hit = AirLiftBrowse.shared.app(forAppGroupPath: url.path) {
-                return (title: hit.app.name.isEmpty ? hit.app.bundle_id : hit.app.name, subtitle: hit.app.bundle_id)
+                return (title: hit.name.isEmpty ? hit.bundle_id : hit.name, subtitle: hit.bundle_id)
             }
             return (title: url.lastPathComponent, subtitle: "bundle id unavailable")
         }
@@ -136,7 +136,7 @@ func folderLabel(url: URL) -> String {
             // by a Data container path — see `app(forAppGroupPath:)`.
             if parent == normalizedFSPath(FSPaths.appGroups),
                let hit = AirLiftBrowse.shared.app(forAppGroupPath: url.path) {
-                return hit.app.bundle_id
+                return hit.bundle_id
             }
             return AirLiftBrowse.shared.app(forContainerPath: url.path)?.bundle_id ?? url.lastPathComponent
         }
