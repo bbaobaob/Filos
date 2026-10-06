@@ -491,6 +491,9 @@ async fn clean_outstanding(afc: &mut AfcClient, logger: &Logger) {
 
         match purge_dead_outstanding_rows(&bytes) {
             Ok(cleaned) => {
+                // `open(WrOnly)` does NOT truncate, so a shorter rewrite would
+                // keep the tail of the longer original. Remove first.
+                let _ = afc.remove(path.clone()).await;
                 match afc.open(path.clone(), AfcFopenMode::WrOnly).await {
                     Ok(mut fd) => {
                         let write = fd.write_entire(&cleaned).await;
@@ -637,6 +640,9 @@ impl BooksSyncBackup {
                 BackupState::Present { data_b64 } => {
                     let bytes = base64_decode(data_b64)
                         .map_err(|e| format!("decode snapshot of {path}: {e}"))?;
+                    // `open(WrOnly)` does NOT truncate, so a shorter snapshot
+                    // would keep the tail of the longer previous file.
+                    let _ = afc.remove(path.clone()).await;
                     match afc.open(path.clone(), AfcFopenMode::WrOnly).await {
                         Ok(mut fd) => {
                             let write = fd.write_entire(&bytes).await;
@@ -1038,6 +1044,9 @@ async fn write_books_plist(
         preserved.len(),
         identifiers
     ));
+    // `open(WrOnly)` does NOT truncate: a shorter manifest would leave the
+    // tail of a longer previous one and the daemon would parse garbage.
+    let _ = afc.remove(BOOKS_PLIST).await;
     let mut fd = afc
         .open(BOOKS_PLIST, AfcFopenMode::WrOnly)
         .await
@@ -1221,6 +1230,24 @@ fn manifest_entry_ids(dict: &plist::Dictionary) -> Vec<String> {
         .collect()
 }
 
+/// Log `Params/DataProtected` whenever a dict carries it.
+///
+/// The flag rides on the handshake dicts (`Capabilities`, `SyncAllowed`, and the
+/// session-1 sync state) and is the one wire field that says whether the account
+/// is in a data-protected state the daemon would refuse assets for — so a refusal
+/// has to name it rather than leave it to be guessed at. Both spellings are
+/// checked because the plist key is not spelled consistently on device.
+fn log_data_protected(label: &str, dict: &plist::Dictionary, logger: &Logger) {
+    let Some(params) = dict.get("Params").and_then(|p| p.as_dictionary()) else {
+        return;
+    };
+    for key in ["DataProtected", "Data Protected"] {
+        if let Some(value) = params.get(key) {
+            logger.log(format!("airlift: {label}: DataProtected={value:?}"));
+        }
+    }
+}
+
 /// One-line roll-up of a session's observations, plus the verdict that follows
 /// from them.
 fn log_session_diag(label: &str, diag: &SyncDiag, logger: &Logger) {
@@ -1276,6 +1303,7 @@ async fn atc_asset_sync(
         .await
         {
             Ok(Ok(dict)) => {
+                log_data_protected(label, &dict, logger);
                 if let Some(name) = atc_message_name(&dict) {
                     logger.log(format!("airlift: {label}: atc received '{name}'"));
                     if name == "Capabilities" {
@@ -1375,6 +1403,7 @@ async fn atc_asset_sync(
     for _ in 0..24 {
         match tokio::time::timeout(Duration::from_secs(5), read_atc_dict(&mut atc_stream)).await {
             Ok(Ok(dict)) => {
+                log_data_protected(label, &dict, logger);
                 if let Some(name) = atc_message_name(&dict) {
                     logger.log(format!("airlift: {label}: atc sync state '{name}'"));
                     if name == "Ping" {
@@ -1485,7 +1514,57 @@ async fn atc_asset_sync(
         }
     }
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // Drain what the daemon still has to say instead of dropping the stream on
+    // it: `SyncFinished`/`SyncFailed` for the last `FileComplete` only arrive
+    // afterwards, and the `SyncFailed` payload carries the real reason. Bounded
+    // two ways (16 messages / 8 s) so a silent daemon cannot wedge the pull.
+    let drain_started = tokio::time::Instant::now();
+    let drain_budget = Duration::from_secs(8);
+    for _ in 0..16 {
+        let elapsed = drain_started.elapsed();
+        if elapsed >= drain_budget {
+            logger.log(format!(
+                "airlift: {label}: atc post-FileComplete drain budget spent after {elapsed:?}"
+            ));
+            break;
+        }
+        match tokio::time::timeout(
+            (drain_budget - elapsed).min(Duration::from_secs(2)),
+            read_atc_dict(&mut atc_stream),
+        )
+        .await
+        {
+            Ok(Ok(dict)) => {
+                let name = atc_message_name(&dict).unwrap_or_else(|| "<unnamed>".to_owned());
+                logger.log(format!(
+                    "airlift: {label}: atc post-FileComplete received '{name}'"
+                ));
+                if name == "SyncFailed" {
+                    // The daemon's real reason lives in this payload, not in the
+                    // later ObjectNotFound.
+                    diag.sync_notices.push(format!("{dict:?}"));
+                    logger.log(format!(
+                        "airlift: {label}: atc post-FileComplete sync notice: {dict:?}"
+                    ));
+                }
+                if name == "SyncFinished" || name == "SyncFailed" {
+                    break;
+                }
+            }
+            Ok(Err(e)) => {
+                logger.log(format!(
+                    "airlift: {label}: atc post-FileComplete read error ({e}); ending the drain"
+                ));
+                break;
+            }
+            Err(_) => {
+                logger.log(format!(
+                    "airlift: {label}: atc post-FileComplete went quiet; ending the drain"
+                ));
+                break;
+            }
+        }
+    }
     drop(atc_stream);
     tokio::time::sleep(Duration::from_millis(300)).await;
     logger.log(format!("airlift: {label}: ATC session finished"));
@@ -1527,6 +1606,9 @@ async fn write_recovery_record(
 ) -> Result<(), String> {
     let path = format!("{AIRLOCK_READ}/{}.json", record.token);
     let bytes = serde_json::to_vec(record).map_err(|e| format!("encode recovery record: {e}"))?;
+    // `open(WrOnly)` does NOT truncate, so a shorter record would leave a stale
+    // tail that no longer parses as JSON.
+    let _ = afc.remove(path.clone()).await;
     let mut fd = afc
         .open(path.clone(), AfcFopenMode::WrOnly)
         .await
@@ -1561,9 +1643,11 @@ fn kept_at_error(token: &str, reason: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// How many times `Airlock/Read/<T>` is re-listed after STEP B, and how long to
-/// wait between attempts: 10 × 500 ms ≈ 5 s of grace.
-const STAGING_POLL_ATTEMPTS: usize = 10;
-const STAGING_POLL_INTERVAL: Duration = Duration::from_millis(500);
+/// wait between attempts: 60 × 1 s ≈ 60 s of grace. The observed move delay was
+/// a couple of seconds, but that was the fast path — the slow path needs to be
+/// waited out rather than declared missing.
+const STAGING_POLL_ATTEMPTS: usize = 60;
+const STAGING_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// Shorter poll after STEP C — that move is already under way.
 const RESTORE_POLL_ATTEMPTS: usize = 4;
 
@@ -1616,6 +1700,20 @@ async fn wait_for_staged_listing(
                 logger.log(format!(
                     "airlift: {read_dir} not listable yet ({attempt}/{STAGING_POLL_ATTEMPTS}): {last_error}"
                 ));
+                // Every so often show what `Airlock/Read` itself holds. The
+                // per-directory error above only ever says "not there", so this
+                // is the only evidence of a directory the daemon nested under
+                // our token instead of moving.
+                if matches!(attempt, 10 | 30 | 60) {
+                    match afc.list_dir(AIRLOCK_READ).await {
+                        Ok(names) => logger.log(format!(
+                            "airlift: DIAG Airlock/Read listing now: {names:?}"
+                        )),
+                        Err(e) => logger.log(format!(
+                            "airlift: DIAG Airlock/Read listing failed: {e:?}"
+                        )),
+                    }
+                }
                 if attempt < STAGING_POLL_ATTEMPTS {
                     tokio::time::sleep(STAGING_POLL_INTERVAL).await;
                 }
@@ -1623,6 +1721,33 @@ async fn wait_for_staged_listing(
         }
     }
     Err(last_error)
+}
+
+/// Name the staging layout the daemon produced when the listing is *exactly*
+/// the target directory sitting there.
+///
+/// A listing that holds one directory named like the asset is not the moved
+/// target — it is the daemon having nested the asset one level deeper, so the
+/// pull "succeeds" while `Airlock/Read/<T>` is the wrong directory. Pure, so
+/// the shape is unit-testable.
+fn log_nesting_probe(json: &str, basename: &str, logger: &Logger) {
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json) else {
+        return;
+    };
+    let Some(entries) = parsed.as_array() else {
+        return;
+    };
+    if entries.len() != 1 {
+        return;
+    }
+    let only = &entries[0];
+    let is_dir = only.get("is_dir").and_then(serde_json::Value::as_bool);
+    let name = only.get("name").and_then(serde_json::Value::as_str);
+    if is_dir == Some(true) && name == Some(basename) {
+        logger.log(format!(
+            "airlift: DIAG STEP B: staging contains only '{basename}' — the daemon may have nested the asset; the listing is NOT the target directory"
+        ));
+    }
 }
 
 /// Bounded existence re-check for the staged copy. `false` means the daemon is
@@ -1812,6 +1937,7 @@ async fn pull_list_and_restore(
     let listing = match listed {
         Ok(json) => {
             logger.log(format!("airlift: STEP B pulled '{target_abs}' to {read_dir}"));
+            log_nesting_probe(&json, &basename, logger);
             if json == "[]" {
                 logger.log(format!(
                     "airlift: STEP B listing of {read_dir} is empty — the target directory was empty, or the daemon created an empty directory instead of moving it; restoring it back either way"
