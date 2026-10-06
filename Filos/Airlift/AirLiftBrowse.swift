@@ -128,6 +128,32 @@ final class AirLiftBrowse {
         return appByContainerPath[wanted]
     }
 
+    /// App owning the App Group container at `path`, from the InstallationProxy
+    /// listing (built lazily on first use).
+    func app(forAppGroupPath path: String) -> AppEntry? {
+        let wanted = AirLiftBrowse.normalizeDevicePath(path)
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if appByGroupContainerPath.isEmpty, let cached = appCache {
+            appByGroupContainerPath = Self.groupContainerPathIndex(cached)
+        }
+        return appByGroupContainerPath[wanted]
+    }
+
+    private var appByGroupContainerPath: [String: AppEntry] = [:]
+
+    private static func groupContainerPathIndex(_ apps: [AppEntry]) -> [String: AppEntry] {
+        var index: [String: AppEntry] = [:]
+        for app in apps {
+            if let groups = app.group_containers?.values {
+                for path in groups where !path.isEmpty {
+                    index[normalizeDevicePath(path)] = app
+                }
+            }
+        }
+        return index
+    }
+
     private static func containerPathIndex(_ apps: [AppEntry]) -> [String: AppEntry] {
         var index: [String: AppEntry] = [:]
         index.reserveCapacity(apps.count)
