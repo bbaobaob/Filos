@@ -59,6 +59,10 @@
 //!   (`…/Containers/Data/Application`, `…/Containers/Shared/AppGroup`,
 //!   `/var/mobile/Applications`) and any `..` component. `/var/mobile/Media`
 //!   is *not* reachable, so the Airlift staging zone cannot be targeted.
+//!   `research_checked_path` (`al_research_list_dir`) drops that allow-list on
+//!   purpose: it is the offline/on-device measurement harness described in
+//!   RESEARCH.md, it is reachable from no UI, and every rule above that is a
+//!   safety rule rather than a policy one still applies to it.
 //! * `Books/Sync/Books.plist` is snapshotted before the first sync (in memory
 //!   *and* in a temp file inside the app container) and restored after every
 //!   step. `OutstandingAssets_*.sqlite` is treated as volatile — never
@@ -206,7 +210,7 @@ pub(crate) fn checked_pull_path(path: &str) -> Result<String, String> {
 /// The parent is where the restore symlink points, so it has to be a real
 /// directory under `/var/mobile` — `/var/mobile` itself and anything shallower
 /// is refused (there would be no parent to drop the directory back into).
-fn parent_and_basename(abs: &str) -> Result<(String, String), String> {
+pub(crate) fn parent_and_basename(abs: &str) -> Result<(String, String), String> {
     let trimmed = abs.trim_end_matches('/');
     match trimmed.rsplit_once('/') {
         Some((parent, name))
@@ -220,9 +224,96 @@ fn parent_and_basename(abs: &str) -> Result<(String, String), String> {
     }
 }
 
+/// [`parent_and_basename`] with the `/var/mobile` prefix requirement dropped.
+///
+/// The structural rule is kept — the split has to yield a non-empty parent and
+/// a non-empty leaf — because the parent is what the STEP A symlink points at,
+/// and there has to be somewhere to drop the directory back into. Only the
+/// *ownership* assumption (that a pull target lives under `/var/mobile`) is
+/// relaxed, and only for [`research_checked_path`].
+pub(crate) fn research_parent_and_basename(abs: &str) -> Result<(String, String), String> {
+    let trimmed = abs.trim_end_matches('/');
+    match trimmed.rsplit_once('/') {
+        Some((parent, name)) if !name.is_empty() => Ok((parent.to_owned(), name.to_owned())),
+        _ => Err(format!(
+            "'{abs}' has no usable parent directory; even a research pull needs a directory one level below its parent"
+        )),
+    }
+}
+
+/// Validate a caller-supplied device path for a **research** pull.
+///
+/// Identical to [`checked_pull_path`] except for the last two rules: there is no
+/// [`PULL_ROOTS`] allow-list and no `/var/mobile` requirement. Everything that is
+/// a *safety* rule rather than a policy one is kept, byte-for-byte the same
+/// message where the check is the same:
+///
+/// * empty / whitespace, relative, any `..` component;
+/// * the `Airlock` and `Books.plist` component names this file reserves for its
+///   own staging zone and sync manifest — targeting those would let a probe
+///   destroy the very scaffolding the run depends on;
+/// * the `/private/var/…` → `/var/…` rewrite and the duplicate/trailing-slash
+///   collapse;
+/// * a usable parent directory ([`research_parent_and_basename`]), because the
+///   STEP A symlink needs somewhere real to point at.
+///
+/// The two dropped rules are exactly the ones that encode "this is our own app
+/// data". The daemon (`com.apple.atc`) is not AFC and its filesystem authority is
+/// not the `/var/mobile/Media` AFC root, so *asking* about `/Library`,
+/// `/var/root` or another app's container is the whole point of the probe: the
+/// question is empirically what the daemon will move, not what policy we would
+/// like it to move.
+///
+/// RESEARCH ONLY, on a device we own. This is a measurement instrument, not a
+/// browsing feature: it changes no default, is reachable from no UI, and must
+/// never be wired to one. Note that the guard is only the *request* filter —
+/// `pull_list_and_restore` still derives its `AssetID` relative to
+/// `/var/mobile`, so a path this guard accepts outside `/var/mobile` fails there
+/// before STEP A. [`research_list_dir_any_path`] exists precisely for those
+/// paths: same guard, root-relative arithmetic. See RESEARCH.md.
+pub(crate) fn research_checked_path(path: &str) -> Result<String, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("path must not be empty".to_owned());
+    }
+    if !trimmed.starts_with('/') {
+        return Err(format!("path must be an absolute device path, got '{trimmed}'"));
+    }
+
+    let mut components: Vec<&str> = Vec::new();
+    for component in trimmed.split('/') {
+        if component.is_empty() {
+            continue;
+        }
+        if component == ".." {
+            return Err(format!("path must not contain '..', got '{trimmed}'"));
+        }
+        if component == "Airlock" || component == "Books.plist" {
+            return Err(format!(
+                "'{component}' is reserved by Airlift and cannot be pulled"
+            ));
+        }
+        components.push(component);
+    }
+    // `/private/var/…` and `/var/…` are the same directory on device: only the
+    // `private` prefix goes away, the `var` component is part of the path.
+    if components.first() == Some(&"private") && components.get(1) == Some(&"var") {
+        components.remove(0);
+    }
+    if components.len() < 3 {
+        return Err(format!(
+            "path needs at least three components (e.g. /var/mobile/Library), got '{trimmed}'"
+        ));
+    }
+
+    let normalized = format!("/{}", components.join("/"));
+    research_parent_and_basename(&normalized)?;
+    Ok(normalized)
+}
+
 /// `LinkTarget` for the staged symlink: three levels up from the Media root
 /// is `/`, so the tail repeats `var/mobile`.
-fn link_target_for_parent(parent_abs: &str) -> String {
+pub(crate) fn link_target_for_parent(parent_abs: &str) -> String {
     format!("../../../{}", parent_abs.trim_start_matches('/'))
 }
 
@@ -230,7 +321,7 @@ fn link_target_for_parent(parent_abs: &str) -> String {
 /// (`/var/mobile/Media/Books/Sync`). `../../..` is `/var/mobile`, so the tail
 /// is the path *relative to `/var/mobile`* — not the full `/var/mobile/…`
 /// spelling, which would resolve one level too deep.
-fn asset_id_for_device_path(abs: &str) -> Result<String, String> {
+pub(crate) fn asset_id_for_device_path(abs: &str) -> Result<String, String> {
     let rest = abs
         .trim_end_matches('/')
         .strip_prefix("/var/mobile/")
@@ -239,6 +330,59 @@ fn asset_id_for_device_path(abs: &str) -> Result<String, String> {
         return Err(format!("'{abs}' has nothing to pull"));
     }
     Ok(format!("../../../{rest}"))
+}
+
+/// Components of the directory every `AssetID` is resolved against —
+/// `/var/mobile/Media/Books/Sync` is `var`, `mobile`, `Media`, `Books`, `Sync`.
+///
+/// [`asset_id_for_device_path`] hard-codes three of them (`../../..` is
+/// `/var/mobile`); [`research_asset_id_for_device_path`] uses all five, which is
+/// what a `..` chain long enough to reach the filesystem root needs.
+const SYNC_DIR_DEPTH: usize = 5;
+
+/// `AssetID` for an arbitrary absolute device path, using a `..` chain long
+/// enough to reach the filesystem root rather than assuming `/var/mobile`.
+/// Research-only: the shipping helper stays exactly as it is.
+///
+/// [`asset_id_for_device_path`] emits `../../../<path relative to /var/mobile>`,
+/// which by construction can only *name* a target under `/var/mobile`. This emits
+/// `"../".repeat(SYNC_DIR_DEPTH)` — five segments, from `Books/Sync` all the way
+/// up to `/` — followed by the target with its leading `/` stripped, so the tail
+/// is the whole absolute path:
+///
+/// ```text
+/// /var/mobile/Containers/Shared/AppGroup -> ../../../../../var/mobile/Containers/Shared/AppGroup
+/// /var/containers/Data/System            -> ../../../../../var/containers/Data/System
+/// ```
+///
+/// For anything under `/var/mobile` the two spellings name the same object — the
+/// extra `../` pair and the repeated `var/mobile` cancel out — which
+/// `research_asset_ids_agree_with_the_shipping_ones_inside_var_mobile` resolves
+/// by hand and asserts. What the longer chain buys is the ability to *ask* about
+/// the other filesystem branches (`/var/containers/…`, `/Library/…`,
+/// `/var/root/…`), which is the whole point of the MobileGestalt-cache probe.
+/// Whether the daemon actually follows a `..` chain that climbs past
+/// `/var/mobile` is the open question; this only makes the question askable.
+/// See RESEARCH.md.
+pub(crate) fn research_asset_id_for_device_path(abs: &str) -> Result<String, String> {
+    let rest = abs
+        .trim_end_matches('/')
+        .strip_prefix('/')
+        .ok_or_else(|| format!("'{abs}' is not an absolute device path"))?;
+    if rest.is_empty() {
+        return Err(format!("'{abs}' is the filesystem root; it has nothing to pull"));
+    }
+    // Every `..` this file puts on the wire has to come from the fixed prefix
+    // above, never from caller input — that invariant is what lets the restore
+    // symlink be reasoned about at all. `research_checked_path` already refuses
+    // `..` and collapses the duplicate slashes; this is the second lock on the
+    // same door, for `.` as well, which the guard leaves in place.
+    if rest.split('/').any(|c| c.is_empty() || c == "." || c == "..") {
+        return Err(format!(
+            "'{abs}' carries a '.', '..' or empty component, which no AssetID may contain"
+        ));
+    }
+    Ok(format!("{}{rest}", "../".repeat(SYNC_DIR_DEPTH)))
 }
 
 /// `AssetID` naming an object inside `/var/mobile/Media` (`../../` is the
@@ -2153,6 +2297,348 @@ async fn pull_list_and_restore(
     }
 }
 
+/// [`pull_list_and_restore`] with the two id helpers swapped for their research
+/// counterparts, so a target outside `/var/mobile` can be *attempted*.
+///
+/// The body below is a deliberate copy rather than a parameter: the shipping
+/// driver stays byte-for-byte what it was, and
+/// `the_research_driver_is_a_copy_of_the_shipping_one` fails the build the moment
+/// the two bodies stop differing in exactly these two lines —
+///
+/// ```text
+/// parent_and_basename      -> research_parent_and_basename
+/// asset_id_for_device_path -> research_asset_id_for_device_path
+/// ```
+///
+/// Everything else is the same driver, on purpose: the `Books.plist` snapshot,
+/// `clean_outstanding`, the STEP A symlink (still [`link_target_for_parent`],
+/// which already reaches any absolute parent from the Media root), the STEP B
+/// manifest, the STEP C restore, the STEP D recovery record. The experiment is
+/// only worth running if what gets measured is the daemon's authority and not a
+/// differently-guarded copy of our own plumbing.
+///
+/// One consequence is not visible in this body and is worth knowing before the
+/// first run: [`RecoveryRecord::validate`] still applies the *shipping*
+/// [`checked_pull_path`], so `al_airlift_recover` reports a recovery record
+/// written for an out-of-`/var/mobile` target as `rejected` instead of replaying
+/// it. The record is still written and still names where the data is, so a run
+/// that ends `kept at Airlock/Read/<T>` on such a path has to be finished by
+/// hand. See RESEARCH.md.
+async fn research_pull_list_and_restore(
+    pairing_path: &str,
+    target_abs: &str,
+    item_base: u64,
+    logger: &Logger,
+) -> Result<String, String> {
+    let (parent, basename) = research_parent_and_basename(target_abs)?;
+    let token = random_hex(10);
+    let pull_dir = format!("{PULL_PREFIX}{token}");
+    let link_dest = format!("{LINK_PREFIX}{token}");
+    let read_dir = format!("{AIRLOCK_READ}/{token}");
+    let record_path = format!("{read_dir}.json");
+
+    let asset_id_pull = research_asset_id_for_device_path(target_abs)?;
+    let asset_id_link = media_asset_id(&format!("{pull_dir}/{LINK_ENTRY}"));
+    let asset_id_read = media_asset_id(&read_dir);
+
+    logger.log(format!(
+        "airlift: listing '{target_abs}' via pull/restore (token {token}, pull {pull_dir}, link {link_dest})"
+    ));
+
+    let (mut tunnel, mut afc) = open_session(pairing_path, logger).await?;
+    let backup = BooksSyncBackup::capture(&mut afc, &token, logger).await;
+    match backup.save_to_temp() {
+        Ok(path) => logger.log(format!("airlift: sync-state snapshot saved to {path:?}")),
+        Err(e) => logger.log(format!("airlift: could not save sync-state snapshot: {e}")),
+    }
+    // Self-heal: every past sync left dead `../../…` rows in the journal, and
+    // those are what makes a repeat run look like the manifest was refused.
+    clean_outstanding(&mut afc, logger).await;
+
+    // ── STEP A: stage the restore symlink ──────────────────────────────────
+    if let Err(e) = stage_restore_symlink(
+        &mut tunnel,
+        &mut afc,
+        &pull_dir,
+        &link_target_for_parent(&parent),
+        logger,
+    )
+    .await
+    {
+        let _ = afc.remove_all(pull_dir.clone()).await;
+        let _ = backup.restore(&mut afc, logger).await;
+        return Err(format!("STEP A failed: {e}"));
+    }
+
+    // ── STEP B: pull the directory into Airlock/Read/<T> (one ATC session) ──
+    //
+    // From here on there is NO early return: once the sync has been submitted
+    // the daemon owns the move and may complete it even when the session
+    // reports an error. Skipping STEP C on the first `ObjectNotFound` is what
+    // stranded real app data in the staging area, so every exit below happens
+    // *after* a restore attempt.
+    ensure_read_dir(&mut afc, logger).await;
+
+    // The manifest keeps every catalog row the snapshot captured, so the
+    // request looks like "download this one asset" instead of "replace the
+    // whole catalog" — that difference is what made the Books asset state
+    // one-shot.
+    let preserved_pull = match backup.preserved_manifest_rows(std::slice::from_ref(&asset_id_pull)) {
+        Ok(rows) => rows,
+        Err(e) => {
+            let _ = afc.remove_all(pull_dir.clone()).await;
+            let _ = backup.restore(&mut afc, logger).await;
+            return Err(format!("STEP B manifest failed: {e}"));
+        }
+    };
+    logger.log(format!(
+        "airlift: STEP B manifest carries {} preserved catalog row(s) plus 1 requested row",
+        preserved_pull.len()
+    ));
+    if let Err(e) = write_books_plist(
+        &mut afc,
+        std::slice::from_ref(&asset_id_pull),
+        &preserved_pull,
+        item_base,
+        logger,
+    )
+    .await
+    {
+        // The manifest never landed, so the daemon has nothing to act on and
+        // nothing was moved. This is the one safe early exit in STEP B.
+        let _ = afc.remove_all(pull_dir.clone()).await;
+        let _ = backup.restore(&mut afc, logger).await;
+        return Err(format!("STEP B manifest failed: {e}"));
+    }
+
+    let mut step_b_diag = SyncDiag::default();
+    let step_b_sync_error = match atc_asset_sync(
+        &mut tunnel,
+        std::slice::from_ref(&asset_id_pull),
+        &[read_dir.clone()],
+        "STEP B pull",
+        logger,
+        &mut step_b_diag,
+    )
+    .await
+    {
+        Ok(()) => None,
+        Err(e) => {
+            logger.log(format!(
+                "airlift: STEP B sync reported an error ({e}); continuing to the staged-listing retry and then to STEP C, because the daemon may still have moved the directory"
+            ));
+            Some(format!("STEP B pull failed: {e}"))
+        }
+    };
+
+    // ── STEP B verification: bounded retry (the listing IS the check) ──
+    let listed = wait_for_staged_listing(&mut afc, &read_dir, logger).await;
+    let step_b_ok = listed.is_ok();
+    let listing = match listed {
+        Ok(json) => {
+            logger.log(format!("airlift: STEP B pulled '{target_abs}' to {read_dir}"));
+            log_nesting_probe(&json, &basename, logger);
+            if json == "[]" {
+                logger.log(format!(
+                    "airlift: STEP B listing of {read_dir} is empty — the target directory was empty, or the daemon created an empty directory instead of moving it; restoring it back either way"
+                ));
+            }
+            Some(json)
+        }
+        Err(e) => {
+            logger.log(format!(
+                "airlift: STEP B: {read_dir} never became listable after {STAGING_POLL_ATTEMPTS} attempts ({e})"
+            ));
+            // Explain the silence: the AFC error above says only that the
+            // directory is not there, never why. The session's own record does.
+            log_session_diag("STEP B pull", &step_b_diag, logger);
+            if step_b_diag.sync_notices.is_empty() && !step_b_diag.manifest_observed {
+                logger.log(format!(
+                    "airlift: DIAG STEP B: the device neither sent an AssetManifest nor a SyncFailed for AssetID={asset_id_pull} → AssetPath={read_dir}; the daemon had no pending download for our requested asset"
+                ));
+            } else if !step_b_diag
+                .manifest_entries
+                .iter()
+                .any(|entry| entry.starts_with(&asset_id_pull))
+            {
+                logger.log(format!(
+                    "airlift: DIAG STEP B: the AssetManifest did not list our AssetID={asset_id_pull} (it listed: {})",
+                    if step_b_diag.manifest_entries.is_empty() { "<none>".to_owned() } else { step_b_diag.manifest_entries.join(", ") }
+                ));
+            } else if step_b_diag
+                .manifest_entries
+                .iter()
+                .any(|entry| entry.starts_with(&asset_id_pull) && entry.contains("IsDownload=false"))
+            {
+                logger.log(format!(
+                    "airlift: DIAG STEP B: our AssetID={asset_id_pull} came back with IsDownload=false, so Books.plist was not accepted as a download request for it"
+                ));
+            }
+            None
+        }
+    };
+    // Kept only for the final error text — STEP C runs either way.
+    let step_b_reason = step_b_sync_error
+        .clone()
+        .unwrap_or_else(|| format!("{read_dir} was not listable after the pull"));
+
+    // ── STEP D (first half): restore the sync state, then the recovery record ──
+    // STEP B's own sync journalled rows of its own, so the journal is cleaned
+    // once more here — before the state is restored and STEP C runs.
+    clean_outstanding(&mut afc, logger).await;
+    // The STEP C manifest is written below anyway, so a restore problem here is
+    // not fatal — but it is worth surfacing, and the final restore runs again.
+    if let Err(e) = backup.restore(&mut afc, logger).await {
+        logger.log(format!(
+            "airlift: warning: Books sync state could not be restored after STEP B ({e}); continuing to STEP C"
+        ));
+    }
+
+    // The recovery record has to be on disk *before* the restore is attempted,
+    // otherwise an interrupted restore is unrecoverable. It is written whether
+    // or not STEP B produced a staged copy: if the process dies mid-STEP-C this
+    // record is what lets al_airlift_recover finish the job.
+    let record = RecoveryRecord {
+        target: target_abs.to_owned(),
+        token: token.clone(),
+        basename: basename.clone(),
+        parent: parent.clone(),
+    };
+    if let Err(e) = write_recovery_record(&mut afc, &record, logger).await {
+        let _ = afc.remove_all(pull_dir.clone()).await;
+        let _ = backup.restore(&mut afc, logger).await;
+        return Err(kept_at_error(
+            &token,
+            &format!(
+                "the recovery record could not be written ({e}), so al_airlift_recover cannot finish this one automatically"
+            ),
+        ));
+    }
+
+    // ── STEP C restore (two FileCompletes in ONE session, symlink first) ──
+    //
+    // Attempted unconditionally. Whether STEP B reported success or not, this is
+    // the only thing that can put a moved directory back, so "attempt the
+    // restore and find it unnecessary" always beats "skip it and hope nothing
+    // moved".
+    // Same manifest shape as STEP B: the catalog rows the snapshot captured plus
+    // the two restore rows. The sync state was restored just above, so these
+    // rows describe exactly what the device had before this run started.
+    let preserved_c = backup
+        .preserved_manifest_rows(&[asset_id_link.clone(), asset_id_read.clone()])
+        .unwrap_or_else(|e| {
+            logger.log(format!(
+                "airlift: warning: no preserved catalog rows for the STEP C manifest ({e})"
+            ));
+            Vec::new()
+        });
+    let mut step_c_diag = SyncDiag::default();
+    let step_c_result = async {
+        // STEP C is its own ATC session, so it needs its own `Item ID` base:
+        // reusing STEP B's pair would have iOS drop both restore rows.
+        let step_c_item_base = new_item_base();
+        write_books_plist(
+            &mut afc,
+            &[asset_id_link.clone(), asset_id_read.clone()],
+            &preserved_c,
+            step_c_item_base,
+            logger,
+        )
+        .await?;
+        atc_asset_sync(
+            &mut tunnel,
+            &[asset_id_link, asset_id_read],
+            &[link_dest.clone(), format!("{link_dest}/{basename}")],
+            "STEP C restore",
+            logger,
+            &mut step_c_diag,
+        )
+        .await
+    }
+    .await;
+    let step_c_ok = match step_c_result {
+        Ok(()) => true,
+        Err(e) => {
+            // Not fatal by itself: the FileCompletes may have been applied before
+            // the session gave up. The staging re-check below decides.
+            logger.log(format!(
+                "airlift: STEP C reported an error ({e}); re-checking whether the staged copy moved back"
+            ));
+            false
+        }
+    };
+
+    // ── STEP D (second half): classify what actually happened ──
+    //
+    // The staging area is re-checked *after* STEP C, never before: the daemon
+    // owns both moves, and only this ordering can tell "restored" apart from
+    // "still parked".
+    let still_staged = staging_present(&mut afc, &read_dir, RESTORE_POLL_ATTEMPTS, logger).await;
+    let restored = format!("{link_dest}/{basename}");
+    let destination_present = afc.get_file_info(restored.clone()).await.is_ok();
+
+    match classify_restore(step_b_ok, step_c_ok, still_staged, destination_present) {
+        RestoreOutcome::StillStaged => {
+            // Keep the staged copy *and* its recovery record: deleting either
+            // here is the data-loss bug. Only our own scaffolding goes.
+            let _ = afc.remove_all(pull_dir.clone()).await;
+            remove_quietly(&mut afc, &link_dest, logger).await;
+            let _ = backup.restore(&mut afc, logger).await;
+            let reason = match (step_c_ok, &step_b_sync_error) {
+                (true, _) => step_b_reason.clone(),
+                (false, Some(e)) => format!("{e}; STEP C restore also failed"),
+                (false, None) => format!("{step_b_reason}; STEP C restore also failed"),
+            };
+            Err(kept_at_error(&token, &reason))
+        }
+        RestoreOutcome::NothingWasStaged => {
+            // Nothing was ever moved, so STEP C had nothing to do — the restore
+            // legitimately found no work. Clean up and report STEP B's reason
+            // instead of pointing at a "kept at" copy that does not exist.
+            logger.log(format!(
+                "airlift: STEP C found nothing to restore ({read_dir} was never created); reporting the STEP B failure"
+            ));
+            remove_quietly(&mut afc, &read_dir, logger).await;
+            remove_quietly(&mut afc, &record_path, logger).await;
+            remove_quietly(&mut afc, &pull_dir, logger).await;
+            remove_quietly(&mut afc, &link_dest, logger).await;
+            let _ = backup.restore(&mut afc, logger).await;
+            Err(step_b_reason)
+        }
+        RestoreOutcome::GoneUnconfirmed => {
+            // The staged copy is gone but the destination was never confirmed:
+            // either the daemon moved it somewhere unexpected or the restore
+            // silently did nothing. There is nothing left to keep, so say that
+            // plainly rather than claiming the data is parked and recoverable.
+            let _ = afc.remove_all(pull_dir.clone()).await;
+            remove_quietly(&mut afc, &link_dest, logger).await;
+            let _ = backup.restore(&mut afc, logger).await;
+            Err(format!(
+                "STEP C: {read_dir} is gone but {restored} was never created; the directory may have been moved somewhere unexpected — re-open it and check"
+            ))
+        }
+        RestoreOutcome::Restored => {
+            remove_quietly(&mut afc, &read_dir, logger).await;
+            remove_quietly(&mut afc, &record_path, logger).await;
+            remove_quietly(&mut afc, &pull_dir, logger).await;
+            remove_quietly(&mut afc, &link_dest, logger).await;
+            let restore_err = backup.restore(&mut afc, logger).await.err();
+            if !step_c_ok {
+                logger.log(format!(
+                    "airlift: STEP C reported an error but {read_dir} is gone and {restored} exists; treating it as restored"
+                ));
+            }
+            logger.log(format!(
+                "airlift: '{target_abs}' restored and staging cleaned up"
+            ));
+            if let Some(e) = restore_err {
+                logger.log(format!("airlift: warning: {e}"));
+            }
+            Ok(listing.unwrap_or_else(|| "[]".to_owned()))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Recovery
 // ---------------------------------------------------------------------------
@@ -2379,6 +2865,128 @@ pub unsafe fn list_dir(
     finish_string_result(res, "al_airlift_list_dir", out_json, out_error)
 }
 
+/// Same as [`list_dir`] but WITHOUT the `PULL_ROOTS` restriction — research
+/// only.
+///
+/// The body is `list_dir` byte for byte; the single difference is the guard call,
+/// which is [`research_checked_path`] instead of [`checked_pull_path`]. Every
+/// other step is target-agnostic and unchanged: the `Books.plist` snapshot,
+/// `clean_outstanding`, the STEP A symlink, the STEP B manifest, the STEP C
+/// restore and the STEP D recovery record. That is deliberate — the experiment
+/// is only worth running if the thing being measured is the daemon's authority,
+/// not a second, differently-guarded copy of our own plumbing.
+///
+/// `path` may therefore name any absolute device path with at least three
+/// components (other apps' containers, `/var/mobile/Library`, `/Library`,
+/// `/var/root`, …); what the daemon actually does with it is the finding.
+/// Returns the same listing JSON shape, the same `kept at Airlock/Read/<T>`
+/// recovery wording, and the same return codes as [`list_dir`].
+///
+/// Note the guard is the *request* filter only: `pull_list_and_restore` derives
+/// its `AssetID` relative to `/var/mobile`, so an accepted path outside
+/// `/var/mobile` still fails there, before STEP A — which makes those rows a
+/// measurement of this file's arithmetic rather than of the daemon. Use
+/// [`research_list_dir_any_path`] for them. See RESEARCH.md.
+///
+/// RESEARCH ONLY, on a device we own. Never call this from a UI path.
+///
+/// # Safety
+/// All pointer args must be null or valid for their documented use.
+pub unsafe fn research_list_dir(
+    pairing_path: *const c_char,
+    path: *const c_char,
+    log_cb: ALLogCallback,
+    ctx: *mut c_void,
+    out_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    if out_json.is_null() && out_error.is_null() {
+        return 2;
+    }
+    let pairing_path = opt_str(pairing_path, "airlift_pairing.plist");
+    let requested = opt_str(path, "");
+    let ctx_usize = ctx as usize;
+
+    let res = run_with_large_stack("al_research_list_dir", move || {
+        let logger = Logger::new(log_cb, ctx_usize as *mut c_void);
+        let target = research_checked_path(&requested)?;
+        // One ATC sync at a time, process-wide, shared with the AFC browser.
+        let _guard = lock_tunnel("al_research_list_dir");
+        idevice_ffi::run_sync_local(pull_list_and_restore(
+            &pairing_path,
+            &target,
+            new_item_base(),
+            &logger
+        ))
+    });
+
+    finish_string_result(res, "al_research_list_dir", out_json, out_error)
+}
+
+/// Same as [`research_list_dir`] but the `AssetID`/`LinkTarget` arithmetic is
+/// root-relative, so targets outside `/var/mobile` can be attempted.
+///
+/// The body is `research_list_dir` line for line; the single difference is the
+/// driver it calls — [`research_pull_list_and_restore`] instead of
+/// [`pull_list_and_restore`] — which is itself a copy differing in exactly the
+/// two id helpers. Same guard ([`research_checked_path`], so no `..` in the
+/// caller-supplied path and `Airlock`/`Books.plist` still reserved), same
+/// snapshot and restore around every step, same listing JSON, same `kept at
+/// Airlock/Read/<T>` wording, same return codes.
+///
+/// This exists for one reason: the MobileGestalt cache lives at
+/// `/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/
+/// Library/Caches/com.apple.MobileGestalt.plist`, a different filesystem branch
+/// from `/var/mobile`, and [`research_list_dir`] could only *accept* it — its
+/// `/var/mobile`-relative `AssetID` arithmetic refused it before STEP A, so it
+/// measured our own guard rather than the daemon.
+///
+/// UNTESTED ON DEVICE. The `../`-chain arithmetic is proven to resolve (it is
+/// asserted against the shipping spelling by hand), but whether
+/// `com.apple.atc` follows a chain that climbs past `/var/mobile` is not known:
+/// the first run against one of these paths is an experiment, not a known
+/// outcome. See RESEARCH.md.
+///
+/// RESEARCH ONLY, on a device we own. Never call this from a UI path.
+///
+/// # Safety
+/// All pointer args must be null or valid for their documented use.
+pub unsafe fn research_list_dir_any_path(
+    pairing_path: *const c_char,
+    path: *const c_char,
+    log_cb: ALLogCallback,
+    ctx: *mut c_void,
+    out_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    if out_json.is_null() && out_error.is_null() {
+        return 2;
+    }
+    let pairing_path = opt_str(pairing_path, "airlift_pairing.plist");
+    let requested = opt_str(path, "");
+    let ctx_usize = ctx as usize;
+
+    let res = run_with_large_stack("al_research_list_dir_any_path", move || {
+        let logger = Logger::new(log_cb, ctx_usize as *mut c_void);
+        let target = research_checked_path(&requested)?;
+        // One ATC sync at a time, process-wide, shared with the AFC browser.
+        let _guard = lock_tunnel("al_research_list_dir_any_path");
+        idevice_ffi::run_sync_local(research_pull_list_and_restore(
+            &pairing_path,
+            &target,
+            new_item_base(),
+            &logger
+        ))
+    });
+
+    finish_string_result(
+        res,
+        "al_research_list_dir_any_path",
+        out_json,
+        out_error,
+    )
+}
+
 /// Finish every interrupted pull still parked in `Airlock/Read`.
 ///
 /// `out_json` receives `[{"target":…,"token":…,"status":"restored"|"failed"|"missing"|…, …}]`.
@@ -2416,7 +3024,8 @@ mod tests {
     use super::{
         asset_id_for_device_path, build_pull_manifest, checked_pull_path,
         link_target_for_parent, media_asset_id, parent_and_basename, preserved_rows,
-        BackupState, BooksSyncBackup, RecoveryRecord, SyncDiag, BOOKS_PLIST,
+        research_asset_id_for_device_path, BackupState, BooksSyncBackup, RecoveryRecord,
+        SyncDiag, BOOKS_PLIST, SYNC_DIR_DEPTH,
     };
 
     const UUID_DIR: &str = "/var/mobile/Containers/Data/Application/DEADBEEF-0000-0000-0000-000000000000/Documents";
@@ -2494,6 +3103,233 @@ mod tests {
         assert_eq!(media_asset_id("Airlock/Read/abc"), "../../Airlock/Read/abc");
         assert!(asset_id_for_device_path("/etc/passwd").is_err());
         assert!(asset_id_for_device_path("/var/mobile").is_err());
+    }
+
+    // -- research-only AssetID arithmetic -------------------------------------
+    //
+    // Resolved by hand, from `Books/Sync` outwards, exactly the way the daemon
+    // has to: no device, no daemon, just the walk the `..` chain implies. This
+    // is what lets the two spellings be compared at all — `cargo test` cannot ask
+    // `com.apple.atc` where an `AssetID` lands.
+
+    /// Where a `Books/Sync`-relative `AssetID` names, computed by walking the
+    /// base directory one component at a time. `..` pops, `.` and empty
+    /// components are no-ops, and `/` is an ordinary component because the tail
+    /// is a full absolute path.
+    fn resolve_from_sync_dir(id: &str) -> String {
+        let mut stack: Vec<&str> = "var/mobile/Media/Books/Sync".split('/').collect();
+        for component in id.split('/') {
+            match component {
+                "" | "." => {}
+                ".." => {
+                    assert!(stack.pop().is_some(), "'..' climbed above / in {id}");
+                }
+                name => stack.push(name),
+            }
+        }
+        format!("/{}", stack.join("/"))
+    }
+
+    /// The root-relative chain climbs to `/`, and for a target under
+    /// `/var/mobile` the two spellings name the very same object — so the
+    /// research arithmetic changes nothing about the verified rows and only
+    /// adds the other filesystem branches.
+    #[test]
+    fn research_asset_ids_agree_with_the_shipping_ones_inside_var_mobile() {
+        assert_eq!(SYNC_DIR_DEPTH, 5, "Books/Sync is five components below /");
+
+        for abs in [
+            UUID_DIR,
+            "/var/mobile/Containers/Data/Application",
+            "/var/mobile/Containers/Shared/AppGroup/GROUP/Library/Caches",
+            "/var/mobile/Applications/Some.app/PlugIns",
+            "/var/mobile/Library/Preferences",
+        ] {
+            let shipping = asset_id_for_device_path(abs).unwrap();
+            let research = research_asset_id_for_device_path(abs).unwrap();
+            assert_ne!(
+                shipping, research,
+                "{abs}: the two spellings are expected to differ"
+            );
+            // Both resolve to the requested path — this is the whole claim, and
+            // it is checked by walking the chain, not by trusting either helper.
+            assert_eq!(
+                resolve_from_sync_dir(&shipping),
+                abs,
+                "{abs}: the shipping AssetID resolves elsewhere"
+            );
+            assert_eq!(
+                resolve_from_sync_dir(&research),
+                abs,
+                "{abs}: the research AssetID resolves elsewhere"
+            );
+        }
+    }
+
+    /// …and outside `/var/mobile` only the research spelling exists at all,
+    /// which is the entire reason it was added: `/var/containers/…` is the
+    /// MobileGestalt cache and is unreachable with the `/var/mobile`-relative
+    /// helper.
+    #[test]
+    fn research_asset_ids_reach_the_other_filesystem_branches() {
+        assert!(
+            asset_id_for_device_path("/var/containers/Data/System").is_err(),
+            "the shipping helper cannot name a /var/containers target at all"
+        );
+
+        for (abs, expected) in [
+            (
+                "/var/mobile/Containers/Shared/AppGroup",
+                "../../../../../var/mobile/Containers/Shared/AppGroup",
+            ),
+            (
+                "/var/containers/Data/System",
+                "../../../../../var/containers/Data/System",
+            ),
+            (
+                "/var/root/Library",
+                "../../../../../var/root/Library",
+            ),
+            (
+                "/Library/MobileDevice/ProvisioningProfiles",
+                "../../../../../Library/MobileDevice/ProvisioningProfiles",
+            ),
+            (
+                "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist",
+                "../../../../../var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist",
+            ),
+        ] {
+            assert_eq!(
+                research_asset_id_for_device_path(abs).unwrap(),
+                expected,
+                "{abs}: wrong root-relative AssetID"
+            );
+            // Hand-resolution has to agree with the string: five `..` from
+            // `Books/Sync` is `/`, and the tail is the absolute path.
+            assert_eq!(resolve_from_sync_dir(expected), abs);
+            // A trailing slash is not a component.
+            assert_eq!(
+                research_asset_id_for_device_path(&format!("{abs}/")).unwrap(),
+                expected
+            );
+        }
+    }
+
+    /// The invariant every `..` on the wire relies on: the ones this file emits
+    /// come from the fixed prefix, never from the caller's path. The guard
+    /// refuses `..` already; the helper refuses it again, so a caller that ever
+    /// reaches it some other way still cannot smuggle a chain out.
+    ///
+    /// The reserved *names* (`Airlock`, `Books.plist`) are deliberately not in
+    /// this list: they are the guard's job, not the arithmetic's, and
+    /// `research_checked_path` keeps them refused.
+    #[test]
+    fn research_asset_ids_refuse_anything_that_is_not_a_plain_path() {
+        for bad in [
+            "var/containers/Data/System", // not absolute
+            "",
+            "/",
+            "//var//containers//Data",
+            "/var/containers/../../etc",
+            "/var/containers/./Data",
+        ] {
+            assert!(
+                research_asset_id_for_device_path(bad).is_err(),
+                "{bad:?} must not produce an AssetID"
+            );
+        }
+        // The five-segment prefix is the whole climb: nothing here ever emits a
+        // sixth `..`, which would leave the filesystem root.
+        for abs in ["/var/containers/Data/System", "/Library/MobileDevice/x"] {
+            let id = research_asset_id_for_device_path(abs).unwrap();
+            assert_eq!(id.matches("../").count(), SYNC_DIR_DEPTH, "{id}");
+            assert!(id.starts_with(&"../".repeat(SYNC_DIR_DEPTH)));
+            assert!(!id.starts_with(&"../".repeat(SYNC_DIR_DEPTH + 1)));
+        }
+    }
+
+    /// The research driver is a copy, and a copy rots the moment somebody fixes
+    /// one side and forgets the other. This pins the *whole* difference between
+    /// the two bodies: the name and the two helper calls. Anything else that
+    /// drifts — a new early return, a missing `clean_outstanding`, a different
+    /// restore order — has to show up here.
+    #[test]
+    fn the_research_driver_is_a_copy_of_the_shipping_one() {
+        /// One top-level `fn` body, from its signature to the `\n}\n` that
+        /// closes it (indented closing braces cannot match).
+        fn body_of<'a>(source: &'a str, sig: &'a str) -> &'a str {
+            let start = source
+                .find(sig)
+                .unwrap_or_else(|| panic!("{sig} is not in this file any more"));
+            let end = start + source[start..].find("\n}\n").expect("fn end") + 3;
+            &source[start..end]
+        }
+
+        let source = include_str!("airlift_dir.rs");
+        let shipping = body_of(source, "async fn pull_list_and_restore(");
+        let research = body_of(source, "async fn research_pull_list_and_restore(");
+
+        // Fold the two name differences away; whatever is left has to match.
+        let folded = research
+            .replace("research_pull_list_and_restore", "pull_list_and_restore")
+            .replace("research_parent_and_basename", "parent_and_basename")
+            .replace("research_asset_id_for_device_path", "asset_id_for_device_path");
+        if folded != shipping {
+            let folded_lines: Vec<&str> = folded.lines().collect();
+            let shipping_lines: Vec<&str> = shipping.lines().collect();
+            assert_eq!(
+                folded_lines.len(),
+                shipping_lines.len(),
+                "the research driver has {} line(s), the shipping one has {}",
+                folded_lines.len(),
+                shipping_lines.len()
+            );
+            let diff: Vec<String> = folded_lines
+                .iter()
+                .zip(shipping_lines.iter())
+                .filter(|(a, b)| a != b)
+                .map(|(a, b)| format!("  research: {a}\n  shipping: {b}"))
+                .collect();
+            panic!(
+                "the research driver has drifted from the shipping one:\n{}",
+                diff.join("\n")
+            );
+        }
+
+        // …and folding only *added* the two id helpers: nothing in the copy may
+        // quietly fall back to the `/var/mobile`-relative pair. Strip the research
+        // spellings first — `parent_and_basename(` is a substring of
+        // `research_parent_and_basename(`, so a naive search never matches.
+        let bare = research
+            .replace("research_parent_and_basename(", "()")
+            .replace("research_asset_id_for_device_path(", "()");
+        for (helper, research_helper) in [
+            ("parent_and_basename(", "research_parent_and_basename("),
+            (
+                "asset_id_for_device_path(",
+                "research_asset_id_for_device_path(",
+            ),
+        ] {
+            assert_eq!(
+                shipping.matches(helper).count(),
+                research.matches(&research_helper).count(),
+                "the copy must call {research_helper} exactly where the shipping \
+                 driver calls {helper}"
+            );
+            assert!(
+                !bare.contains(helper),
+                "the research driver must not still call {helper}"
+            );
+        }
+
+        // The safety machinery is the copy's whole point, so it has to be there
+        // rather than assumed: snapshot before the first sync, restore after.
+        assert!(research.contains("BooksSyncBackup::capture"));
+        assert!(research.contains("backup.restore"));
+        assert!(research.contains("clean_outstanding"));
+        // The restore symlink is unchanged: `link_target_for_parent` was already
+        // generic, which is why only the AssetID needed the research variant.
+        assert!(research.contains("link_target_for_parent(&parent)"));
     }
 
     #[test]
@@ -2899,6 +3735,62 @@ mod tests {
         let message = super::kept_at_error("deadbeef", "boom");
         assert!(message.contains("kept at Airlock/Read/deadbeef"));
         assert!(message.contains("al_airlift_recover"));
+    }
+
+    /// The research guard is a *superset*: everything the shipping guard accepts
+    /// it accepts too, with the same normalised spelling, so enabling the probe
+    /// can never narrow what the verified feature can do. What it drops is only
+    /// the policy (the `PULL_ROOTS` allow-list, the `/var/mobile` requirement);
+    /// what it keeps is every safety rule.
+    #[test]
+    fn the_research_guard_is_a_superset_of_the_shipping_guard() {
+        use super::research_checked_path;
+
+        for path in [
+            UUID_DIR,
+            "/var/mobile/Containers/Data/Application",
+            "/var/mobile/Containers/Shared/AppGroup/GROUP/Library/Caches",
+            "/var/mobile/Applications/Some.app/PlugIns",
+            "/private/var/mobile/Containers/Data/Application/Documents/",
+        ] {
+            assert_eq!(
+                research_checked_path(path).unwrap(),
+                checked_pull_path(path).unwrap(),
+                "{path} must survive the research guard unchanged"
+            );
+        }
+
+        // Dropped by policy only: outside the containers but structurally sane.
+        for path in [
+            "/var/mobile/Library",
+            "/var/mobile/Library/Preferences",
+            "/var/root/Library",
+            "/Library/MobileDevice/ProvisioningProfiles",
+        ] {
+            assert!(checked_pull_path(path).is_err(), "{path} is refused in production");
+            assert!(research_checked_path(path).is_ok(), "{path} must be probeable");
+        }
+
+        // Safety rules survive the relaxation.
+        for path in [
+            "",
+            "   ",
+            "relative/path",
+            "/var/mobile/../var/mobile/Library",
+            "/Airlock",
+            "/var/mobile/Airlock/Read",
+            "/Books.plist",
+            "/var/mobile/Books.plist",
+        ] {
+            assert!(research_checked_path(path).is_err(), "{path} must be refused");
+        }
+        // Three components is the floor: the symlink needs a parent, and a
+        // target needs at least one directory below it.
+        assert!(research_checked_path("/").is_err());
+        assert!(research_checked_path("/var").is_err());
+        assert!(research_checked_path("/var/mobile").is_err());
+        assert!(research_checked_path("/var/mobile/Media").is_ok());
+        assert!(research_checked_path("/Library/Preferences").is_err());
     }
 
     // -- post-STEP-C decision table ------------------------------------------

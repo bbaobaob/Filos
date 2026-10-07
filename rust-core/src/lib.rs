@@ -13,6 +13,11 @@
 //!   al_airlift_list_dir    — list a real device directory through the Books
 //!                             ATC "move" trick (pull + restore), no HouseArrest
 //!   al_airlift_recover     — finish an interrupted al_airlift_list_dir pull
+//!   al_research_list_dir   — RESEARCH: the same move trick with no app-container
+//!                             allow-list, for measuring the daemon's reach
+//!   al_research_list_dir_any_path
+//!                         — RESEARCH: as above, with a root-relative AssetID so
+//!                             targets outside /var/mobile can be attempted
 //!   al_string_free         — free any char* returned by this library
 
 use std::ffi::{c_char, c_void};
@@ -24,6 +29,7 @@ pub mod ffi_util;
 pub mod grappa;
 pub mod logging;
 pub mod pairing;
+pub mod research;
 
 // Re-export idevice-ffi's symbols into our staticlib (tunnel_create_rppairing,
 // afc_*, rsd_*, adapter_*, etc.) so Swift can call them directly.
@@ -549,6 +555,99 @@ pub unsafe extern "C" fn al_airlift_recover(
         Err(e) => {
             if !out_error.is_null() {
                 *out_error = ffi_util::cstr(format!("Rust panic in al_airlift_recover: {e:?}"));
+            }
+            1
+        }
+    }
+}
+
+/// RESEARCH ONLY — [`al_airlift_list_dir`] with the app-container allow-list
+/// dropped, so an arbitrary absolute device path can be put through the same
+/// pull/restore dance to measure what `com.apple.atc` will actually move.
+/// `out_json` is exactly what `al_airlift_list_dir` emits, `out_error` carries
+/// the same `kept at Airlock/Read/<T>` recovery wording, and the return codes
+/// are the same: 0 success, 1 error, 2 when both out-pointers are null.
+///
+/// `path` is only refused for the reasons [`al_airlift_list_dir`] refuses for
+/// safety rather than policy (empty, relative, `..`, the `Airlock` /
+/// `Books.plist` names Airlift reserves for itself) plus a three-component depth
+/// floor. Paths that pass are *attempted*; whether the daemon moves them is the
+/// experimental result, not a precondition.
+///
+/// See RESEARCH.md. Intended for a device we own; reachable from no UI path,
+/// never wired to one.
+///
+/// # Safety
+/// All pointer arguments must be null or valid for their documented use.
+#[no_mangle]
+pub unsafe extern "C" fn al_research_list_dir(
+    pairing_path: *const c_char,
+    path: *const c_char,
+    log_cb: exploit::ALLogCallback,
+    ctx: *mut c_void,
+    out_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        airlift_dir::research_list_dir(pairing_path, path, log_cb, ctx, out_json, out_error)
+    }));
+    match res {
+        Ok(rc) => rc,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = ffi_util::cstr(format!("Rust panic in al_research_list_dir: {e:?}"));
+            }
+            1
+        }
+    }
+}
+
+/// RESEARCH ONLY — [`al_research_list_dir`] with a *root-relative* `AssetID`, so
+/// the pull can be pointed at a filesystem branch other than `/var/mobile`.
+///
+/// The difference is one line of arithmetic. `al_research_list_dir` builds the
+/// STEP B `AssetID` as `../../../<path relative to /var/mobile>`, so any target
+/// outside `/var/mobile` is refused *by us*, before STEP A — the experiment
+/// measured this library's guard rather than `com.apple.atc`. This entry point
+/// climbs all the way from `Books/Sync` to `/` (`../../../../..`) and names the
+/// target in full, so `/var/containers/Shared/SystemGroup/…`, `/Library/…` and
+/// `/var/root/…` can actually be put on the wire. That is what makes the
+/// MobileGestalt-cache probe possible.
+///
+/// Everything else is identical to [`al_research_list_dir`]: same guard (so no
+/// `..` in `path` and `Airlock`/`Books.plist` still refused), same snapshot and
+/// restore around every step, same `out_json`, same `kept at Airlock/Read/<T>`
+/// wording, same return codes (0 success, 1 error, 2 when both out-pointers are
+/// null).
+///
+/// UNTESTED ON DEVICE: whether the daemon resolves a `..` chain that climbs past
+/// `/var/mobile` is an open question, so the first run here is an experiment.
+/// See RESEARCH.md. Intended for a device we own; reachable from no UI path,
+/// never wired to one.
+///
+/// # Safety
+/// All pointer arguments must be null or valid for their documented use.
+#[no_mangle]
+pub unsafe extern "C" fn al_research_list_dir_any_path(
+    pairing_path: *const c_char,
+    path: *const c_char,
+    log_cb: exploit::ALLogCallback,
+    ctx: *mut c_void,
+    out_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i32 {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        airlift_dir::research_list_dir_any_path(
+            pairing_path, path, log_cb, ctx, out_json, out_error,
+        )
+    }));
+    match res {
+        Ok(rc) => rc,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = ffi_util::cstr(format!(
+                    "Rust panic in al_research_list_dir_any_path: {e:?}"
+                ));
             }
             1
         }
