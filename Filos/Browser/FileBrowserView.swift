@@ -443,8 +443,7 @@ struct FileBrowserView: View {
         }
         let message = "Pull-to-refresh does not re-read \(path): reading it means moving the directory out to Airlock/Read and back with the AirTraffic sync. Use \"Retry AirTraffic read\" if you want another attempt on purpose."
         print("[!] \(message)")
-        localizedError = message
-        currentState = .unknownError
+        failRemoteListing(message)
     }
 
     /// An app container, App Group or `/var/mobile/Applications` directory via
@@ -472,11 +471,19 @@ struct FileBrowserView: View {
                 applyRemoteListing(entries)
             case .failure(let message):
                 print("[!] ATC read of \(path) is not retried automatically: \(message)")
-                localizedError = message
-                currentState = .unknownError
+                failRemoteListing(message)
             }
         case .refused(let message):
             print("[!] ATC read of \(path) refused: \(message)")
+            failRemoteListing(message)
+        }
+    }
+
+    /// Every remote path is enumerated on a background queue (tunnel opens
+    /// block). SwiftUI state mutated off the main thread is undefined behaviour
+    /// and crashes on navigation, so all of it hops back here.
+    private func failRemoteListing(_ message: String) {
+        DispatchQueue.main.async {
             localizedError = message
             currentState = .unknownError
         }
@@ -502,8 +509,7 @@ struct FileBrowserView: View {
             applyAppListing(apps)
         case .failure(let error):
             print("[!] al_list_apps failed for \(path): \(error)")
-            localizedError = "Could not list installed apps over the Airlift tunnel:\n\(error)"
-            currentState = .unknownError
+            failRemoteListing("Could not list installed apps over the Airlift tunnel:\n\(error)")
         }
     }
 
@@ -517,8 +523,7 @@ struct FileBrowserView: View {
             applyRemoteListing(entries)
         case .failure(let error):
             print("[!] house_arrest listing failed for \(bundleId)\(relativePath): \(error)")
-            localizedError = "Could not open \(bundleId) through house_arrest:\n\(error)"
-            currentState = .unknownError
+            failRemoteListing("Could not open \(bundleId) through house_arrest:\n\(error)")
         }
     }
 
@@ -547,8 +552,7 @@ struct FileBrowserView: View {
             // permission", which is never the truth here. Show the real
             // FFI failure instead.
             print("[!] remote listing failed for \(path): \(error)")
-            localizedError = "Could not list this directory over the Airlift tunnel:\n\(error)"
-            currentState = .unknownError
+            failRemoteListing("Could not list this directory over the Airlift tunnel:\n\(error)")
             return
         }
     }
@@ -563,10 +567,7 @@ struct FileBrowserView: View {
             let url = URL(fileURLWithPath: app.path)
             return remoteFileItem(name: app.name.isEmpty ? app.bundle_id : app.name, isDirectory: true, size: 0, url: url)
         }
-        let sorted = sortFiles(files: unsorted)
-        dirFiles = sorted
-        unfilteredFiles = sorted
-        currentState = sorted.isEmpty ? .noFiles : .loaded
+        publishListing(sortFiles(files: unsorted))
     }
 
     /// Turn remote AFC entries into rows for the current directory.
@@ -576,9 +577,21 @@ struct FileBrowserView: View {
             return remoteFileItem(name: entry.name, isDirectory: entry.isDir, size: entry.size, url: url)
         }
         let sorted = sortFiles(files: unsorted)
-        dirFiles = sorted
-        unfilteredFiles = sorted
-        currentState = sorted.isEmpty ? .noFiles : .loaded
+        publishListing(sorted)
+    }
+
+    /// Hand a finished listing to SwiftUI on the main thread.
+    ///
+    /// Every remote enumeration runs on a background queue because the tunnel
+    /// FFI blocks for seconds; mutating `@State` from there is undefined
+    /// behaviour and was crashing the app the moment a row was tapped and the
+    /// next screen's own enumeration wrote its state.
+    private func publishListing(_ sorted: [FileItem]) {
+        DispatchQueue.main.async {
+            dirFiles = sorted
+            unfilteredFiles = sorted
+            currentState = sorted.isEmpty ? .noFiles : .loaded
+        }
     }
 
     /// Original sandboxed-FileManager enumeration, used for every non-Airlift
