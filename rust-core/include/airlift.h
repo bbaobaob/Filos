@@ -274,13 +274,24 @@ int32_t al_research_list_dir(const char *pairing_path,
 // RESEARCH ONLY — al_research_list_dir with a root-relative AssetID, so the
 // pull can target a filesystem branch other than /var/mobile. `dataclass` is
 // as for al_research_list_dir: NULL or "" means "Book".
+//
+// `sync_root_dir` is that dataclass's AFC-relative sync directory, e.g.
+// "Music/Sync". The daemon resolves an AssetID relative to the sync directory
+// and parses the catalog plist inside it, so a sweep that does not say which
+// root it is asking about would write Books/Sync/Books.plist while requesting
+// `Music` — guaranteed inconclusive. NULL, "" or "Books/Sync" mean the default
+// Books root. The derived root is a GUESS: no non-Book AirTraffic sync root is
+// known as of 2026-10-07, and this parameter exists so the device sweep can
+// test it. A non-default root is logged once as "derived, UNTESTED", and its
+// state files are not snapshotted.
 int32_t al_research_list_dir_any_path(const char *pairing_path,
                                       const char *path,
                                       ALLogCallback log_cb,
                                       void *ctx,
                                       char **out_json,
                                       char **out_error,
-                                      const char *dataclass);
+                                      const char *dataclass,
+                                      const char *sync_root_dir);
 
 // ---------------------------------------------------------------------------
 // Syslog Stream / Live Card Detection

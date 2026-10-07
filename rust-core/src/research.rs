@@ -16,7 +16,7 @@
 //! the UI.
 
 use crate::airlift_dir::{
-    asset_id_for_device_path, link_target_for_parent, parent_and_basename,
+    asset_id_for_device_path, default_sync_root, link_target_for_parent, parent_and_basename,
     research_asset_id_for_device_path, research_checked_path, research_parent_and_basename,
 };
 
@@ -115,7 +115,8 @@ pub fn probe_manifest_ids_any(normalized: &str) -> (String, String) {
     let Ok((parent, _basename)) = research_parent_and_basename(normalized) else {
         return (String::new(), String::new());
     };
-    let Ok(asset_id) = research_asset_id_for_device_path(normalized) else {
+    let Ok(asset_id) = research_asset_id_for_device_path(normalized, default_sync_root().depth)
+    else {
         return (String::new(), String::new());
     };
     (asset_id, link_target_for_parent(&parent))

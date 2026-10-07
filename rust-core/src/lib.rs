@@ -639,6 +639,21 @@ pub unsafe extern "C" fn al_research_list_dir(
 /// point a dataclass sweep wants, because the root-relative `AssetID` is what
 /// makes a target outside `/var/mobile` expressible at all.
 ///
+/// `sync_root_dir` is the AFC-relative sync directory of that dataclass, e.g.
+/// `"Music/Sync"`. The wire dataclass alone is not enough to ask about another
+/// dataclass's sync: the daemon resolves an `AssetID` relative to the sync
+/// directory and parses the catalog plist in it, so without this the run would
+/// write `Books/Sync/Books.plist` while asking for `Music` and would measure
+/// nothing. NULL, "" or `"Books/Sync"` mean the default Books root; any other
+/// string is sanitised and turned into a sync root whose component count fixes
+/// the `..` chain of the STEP B `AssetID`.
+///
+/// The derived root is a **guess**: as of 2026-10-07 no non-`Book` AirTraffic
+/// sync root is known, and this parameter exists so a sweep can test the guess
+/// instead of being guaranteed-inconclusive without it. A non-default root is
+/// logged once as `derived, UNTESTED` before the session starts, and its state
+/// files are not snapshotted.
+///
 /// # Safety
 /// All pointer arguments must be null or valid for their documented use.
 #[no_mangle]
@@ -650,10 +665,11 @@ pub unsafe extern "C" fn al_research_list_dir_any_path(
     out_json: *mut *mut c_char,
     out_error: *mut *mut c_char,
     dataclass: *const c_char,
+    sync_root_dir: *const c_char,
 ) -> i32 {
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         airlift_dir::research_list_dir_any_path(
-            pairing_path, path, log_cb, ctx, out_json, out_error, dataclass,
+            pairing_path, path, log_cb, ctx, out_json, out_error, dataclass, sync_root_dir,
         )
     }));
     match res {

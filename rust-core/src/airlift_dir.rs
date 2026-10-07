@@ -352,15 +352,146 @@ pub(crate) fn asset_id_for_device_path(abs: &str) -> Result<String, String> {
 /// what a `..` chain long enough to reach the filesystem root needs.
 const SYNC_DIR_DEPTH: usize = 5;
 
+/// `/var/mobile/Media` in components — the prefix every AFC-relative sync root
+/// is measured from. `Books/Sync` plus this is [`SYNC_DIR_DEPTH`].
+const MEDIA_ROOT_DEPTH: usize = 3;
+
+// ---------------------------------------------------------------------------
+// Research: which sync root a dataclass uses
+// ---------------------------------------------------------------------------
+
+/// A dataclass's sync root: where its catalog plist lives, and how deep the
+/// directory is below the filesystem root.
+///
+/// The AirTraffic daemon resolves an `AssetID` **relative to the sync
+/// directory of the sync that is running**, so the same target needs a
+/// different number of `../` for every dataclass. [`BOOKS_PLIST`] and
+/// [`SYNC_DIR_DEPTH`] are the `Book` values, and everything the shipping path
+/// does is still anchored to them — this struct exists so a *research* sweep
+/// can move the anchor.
+///
+/// # The derived roots are guesses, and that is the point
+///
+/// As of **2026-10-07 the real sync root of every dataclass other than `Book`
+/// is unknown**. No observation of a non-`Book` AirTraffic sync exists: no
+/// public PoC, no log, no device. [`sync_root_for`] therefore *derives* a
+/// plausible root from the dataclass name — `<Name>/Sync`, with
+/// `<Name>/Sync/<Name>.plist` as its catalog — on the theory that iOS gives each
+/// dataclass its own `Media/<Name>/Sync` directory, which is how Books is laid
+/// out. That theory may be wrong in the directory name, in the depth, or in
+/// the plist name.
+///
+/// The device sweep is designed to test it: without this, a "sync Music" run
+/// would write its manifest to `Books/Sync/Books.plist` while asking the
+/// daemon for `Music`, which is a guaranteed-inconclusive experiment. With it,
+/// the run at least puts the request where the guess says it belongs, and the
+/// diagnostics say out loud that the guess is untested.
+///
+/// RESEARCH ONLY. A wrong answer here costs one inconclusive measurement; a
+/// right one buys a dataclass sweep. It is never consulted by the shipping
+/// path, which always uses [`default_sync_root`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyncRoot {
+    /// AFC-relative sync directory, e.g. `Music/Sync`.
+    pub dir: String,
+    /// AFC-relative catalog plist, e.g. `Music/Sync/Music.plist`.
+    pub manifest: String,
+    /// Components of `/var/mobile/Media/<dir>` — how many `../` an
+    /// `AssetID` resolved against this root needs to reach the filesystem root.
+    pub depth: usize,
+}
+
+/// The `Book` sync root: today's [`BOOKS_PLIST`] and [`SYNC_DIR_DEPTH`], spelled
+/// out. This is the root the entire shipping path assumes, and the root every
+/// research run falls back to.
+pub fn default_sync_root() -> SyncRoot {
+    SyncRoot {
+        dir: "Books/Sync".to_owned(),
+        manifest: BOOKS_PLIST.to_owned(),
+        depth: SYNC_DIR_DEPTH,
+    }
+}
+
+/// A callable sync root derived from an AirTraffic dataclass name.
+///
+/// Pure — no device I/O, no I/O of any kind — so a sweep can enumerate
+/// candidate dataclasses offline and see what each one *would* look for.
+/// NULL, empty or `Book` (case-insensitively) is [`default_sync_root`];
+/// anything else is derived by [`sync_root_for_dir`] from `<name>/Sync`.
+///
+/// The derived root is a **guess**, see [`SyncRoot`]. It is the shape iOS uses
+/// for Books, extrapolated to a name — nothing more.
+pub fn sync_root_for(dataclass: &str) -> SyncRoot {
+    let name = dataclass.trim();
+    if name.is_empty() || name.eq_ignore_ascii_case(BOOK_DATACLASS) {
+        return default_sync_root();
+    }
+    // The name is sanitised *before* it is turned into a path, so a dataclass
+    // that is entirely traversal (or punctuation) cannot leave a bare `Sync`
+    // directory behind as its root.
+    match sync_root_component(name) {
+        Some(clean) if !clean.eq_ignore_ascii_case(BOOK_DATACLASS) => {
+            sync_root_for_dir(&format!("{clean}/Sync"))
+        }
+        _ => default_sync_root(),
+    }
+}
+
+/// A callable sync root derived from an AFC-relative directory string, e.g.
+/// `"Music/Sync"`. Empty or wholly unparsable input is [`default_sync_root`].
+///
+/// Every component is sanitised (see [`sync_root_component`]), so the result can
+/// never contain `..`, a leading `/`, or an empty component — which is the same
+/// invariant [`research_asset_id_for_device_path`] refuses to break before it
+/// puts a `..` chain on the wire. A caller-supplied `..` therefore cannot reach
+/// an `AssetID` by way of the sync root.
+pub fn sync_root_for_dir(dir: &str) -> SyncRoot {
+    let components: Vec<String> = dir.split('/').filter_map(sync_root_component).collect();
+    if components.is_empty() {
+        return default_sync_root();
+    }
+    // The catalog is named after the dataclass's own media directory, which is
+    // the first component: `Music/Sync` → `Music/Sync/Music.plist`.
+    let name = components[0].clone();
+    let dir = components.join("/");
+    SyncRoot {
+        manifest: format!("{dir}/{name}.plist"),
+        depth: MEDIA_ROOT_DEPTH + components.len(),
+        dir,
+    }
+}
+
+/// One usable component of a sync-root directory, or `None` for anything that
+/// is not one.
+///
+/// The character filter is what makes a caller-supplied `..` harmless here:
+/// `.` is not in the keep-set, so `..`, `../..` and `.../etc` all collapse to
+/// nothing rather than becoming a path that climbs out of the Media root. An
+/// empty component is refused for the same reason `research_checked_path`
+/// refuses one — `Media//Sync` and `Media/Sync` must not be two spellings of
+/// the same directory with different depths.
+fn sync_root_component(raw: &str) -> Option<String> {
+    let kept: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .take(32)
+        .collect();
+    (!kept.is_empty() && !kept.starts_with('-')).then_some(kept)
+}
+
 /// `AssetID` for an arbitrary absolute device path, using a `..` chain long
 /// enough to reach the filesystem root rather than assuming `/var/mobile`.
 /// Research-only: the shipping helper stays exactly as it is.
 ///
+/// `depth` is the component count of the sync directory the session is running
+/// in — [`default_sync_root`]'s for `Book`, a derived [`SyncRoot`]'s for a
+/// sweep — and every `..` on the wire comes from `"../".repeat(depth)`.
+///
 /// [`asset_id_for_device_path`] emits `../../../<path relative to /var/mobile>`,
 /// which by construction can only *name* a target under `/var/mobile`. This emits
-/// `"../".repeat(SYNC_DIR_DEPTH)` — five segments, from `Books/Sync` all the way
-/// up to `/` — followed by the target with its leading `/` stripped, so the tail
-/// is the whole absolute path:
+/// `"../".repeat(depth)` — for `Book`, five segments, from `Books/Sync` all the
+/// way up to `/` — followed by the target with its leading `/` stripped, so the
+/// tail is the whole absolute path:
 ///
 /// ```text
 /// /var/mobile/Containers/Shared/AppGroup -> ../../../../../var/mobile/Containers/Shared/AppGroup
@@ -376,7 +507,10 @@ const SYNC_DIR_DEPTH: usize = 5;
 /// Whether the daemon actually follows a `..` chain that climbs past
 /// `/var/mobile` is the open question; this only makes the question askable.
 /// See RESEARCH.md.
-pub(crate) fn research_asset_id_for_device_path(abs: &str) -> Result<String, String> {
+pub(crate) fn research_asset_id_for_device_path(
+    abs: &str,
+    depth: usize,
+) -> Result<String, String> {
     let rest = abs
         .trim_end_matches('/')
         .strip_prefix('/')
@@ -394,7 +528,7 @@ pub(crate) fn research_asset_id_for_device_path(abs: &str) -> Result<String, Str
             "'{abs}' carries a '.', '..' or empty component, which no AssetID may contain"
         ));
     }
-    Ok(format!("{}{rest}", "../".repeat(SYNC_DIR_DEPTH)))
+    Ok(format!("{}{rest}", "../".repeat(depth)))
 }
 
 /// `AssetID` naming an object inside `/var/mobile/Media` (`../../` is the
@@ -1330,6 +1464,185 @@ async fn log_books_plist_on_device(
             .unwrap_or("<none>");
         logger.log(format!(
             "airlift: DIAG Books.plist row {n}: Persistent ID={id} Item ID={item} DSID={dsid}"
+        ));
+    }
+}
+
+/// AFC directories that have to exist before the manifest can be written.
+///
+/// [`write_books_plist`] spells its own out for `Books/Sync`; a derived
+/// [`SyncRoot`] has to be walked component by component (`Music`,
+/// `Music/Sync`), because there is no way to ask AFC for "create the parents"
+/// and every prefix has to exist on its own.
+fn sync_root_dir_prefixes(dir: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut acc = String::new();
+    for component in dir.split('/').filter(|c| !c.is_empty()) {
+        if !acc.is_empty() {
+            acc.push('/');
+        }
+        acc.push_str(component);
+        out.push(acc.clone());
+    }
+    out
+}
+
+/// Research-only copy of [`write_books_plist`] that writes into
+/// `sync_root.manifest` instead of [`BOOKS_PLIST`].
+///
+/// A duplicate rather than a parameterisation on purpose: `write_books_plist`
+/// and `log_books_plist_on_device` are called from inside
+/// [`pull_list_and_restore`], which has to stay byte-identical to the code
+/// that has been verified on device. Threading a path through it would change
+/// that function's body, so the research driver gets its own pair instead —
+/// exactly the arrangement the id helpers already use.
+///
+/// [`SyncDiag`] also notes that the derived root's own state files are **not**
+/// snapshotted: [`BooksSyncBackup::capture`] covers the `Books/Sync` list and
+/// must not change, so a sweep writes `Music/Sync/Music.plist` without a
+/// snapshot to put it back. `research_list_dir_any_path` says so in the log
+/// before the session starts, because it is the one irreversible thing this
+/// parameter buys.
+async fn research_write_sync_plist(
+    afc: &mut AfcClient,
+    identifiers: &[String],
+    preserved: &[plist::Value],
+    item_base: u64,
+    sync_root: &SyncRoot,
+    logger: &Logger,
+) -> Result<(), String> {
+    for dir in ["Airlock", "Airlock/Book", AIRLOCK_READ]
+        .into_iter()
+        .map(str::to_owned)
+        .chain(sync_root_dir_prefixes(&sync_root.dir))
+    {
+        let _ = afc.mk_dir(dir).await;
+    }
+    let manifest = &sync_root.manifest;
+    let plist_bytes = build_pull_manifest(identifiers, preserved, item_base)?;
+    logger.log(format!(
+        "airlift: manifest to write = {} byte(s) to {manifest}, {} preserved row(s), Item ID base {item_base}, requested {:?}",
+        plist_bytes.len(),
+        preserved.len(),
+        identifiers
+    ));
+    // `open(WrOnly)` does NOT truncate: a shorter manifest would leave the
+    // tail of a longer previous one and the daemon would parse garbage.
+    let _ = afc.remove(manifest.to_owned()).await;
+    let mut fd = afc
+        .open(manifest.to_owned(), AfcFopenMode::WrOnly)
+        .await
+        .map_err(|e| format!("AFC open {manifest}: {e:?}"))?;
+    fd.write_entire(&plist_bytes)
+        .await
+        .map_err(|e| format!("AFC write {manifest}: {e:?}"))?;
+    let _ = fd.close().await;
+    logger.log(format!("airlift: {manifest} manifest now declares {identifiers:?}"));
+    research_log_sync_plist_on_device(afc, identifiers, sync_root, logger).await;
+    Ok(())
+}
+
+/// Research-only copy of [`log_books_plist_on_device`] that stats, opens and
+/// parses `sync_root.manifest`.
+///
+/// Same reasoning as [`research_write_sync_plist`]: the shipping helper hard-codes
+/// [`BOOKS_PLIST`], and a diagnostic that reports the size of `Books.plist`
+/// while the session asked the daemon about `Music` is exactly the kind of line
+/// that makes a failed sweep unreadable. The row key it looks for is still
+/// `Books`, because [`build_pull_manifest`] still writes that key and is not
+/// changed either — for a derived root a "no 'Books' array" line therefore means
+/// "the plist is there but the key we wrote is not what this dataclass parses",
+/// which is itself a result worth having.
+async fn research_log_sync_plist_on_device(
+    afc: &mut AfcClient,
+    identifiers: &[String],
+    sync_root: &SyncRoot,
+    logger: &Logger,
+) {
+    let manifest = &sync_root.manifest;
+    match afc.get_file_info(manifest.to_owned()).await {
+        Ok(info) => logger.log(format!(
+            "airlift: DIAG {manifest} on device: size={} byte(s)",
+            info.size
+        )),
+        Err(e) => {
+            logger.log(format!(
+                "airlift: DIAG {manifest} on device: stat failed ({e:?}) — the manifest may not have landed"
+            ));
+            return;
+        }
+    }
+
+    let mut fd = match afc.open(manifest.to_owned(), AfcFopenMode::RdOnly).await {
+        Ok(fd) => fd,
+        Err(e) => {
+            logger.log(format!(
+                "airlift: DIAG {manifest} on device: read open failed ({e:?})"
+            ));
+            return;
+        }
+    };
+    let read = fd.read_entire().await;
+    let _ = fd.close().await;
+    let bytes = match read {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            logger.log(format!("airlift: DIAG {manifest} on device: read failed ({e:?})"));
+            return;
+        }
+    };
+
+    let value = match plist::from_bytes::<plist::Value>(&bytes) {
+        Ok(value) => value,
+        Err(e) => {
+            logger.log(format!(
+                "airlift: DIAG {manifest} on device: {} byte(s) did not parse as a plist ({e})",
+                bytes.len()
+            ));
+            return;
+        }
+    };
+    let rows = value
+        .as_dictionary()
+        .and_then(|d| d.get("Books"))
+        .and_then(plist::Value::as_array);
+    let Some(rows) = rows else {
+        logger.log(format!(
+            "airlift: DIAG {manifest} on device: {} byte(s) parsed, but there is no 'Books' array",
+            bytes.len()
+        ));
+        return;
+    };
+    let first_id = rows
+        .first()
+        .and_then(|r| r.as_dictionary())
+        .and_then(|d| d.get("Persistent ID"))
+        .and_then(plist::Value::as_string)
+        .unwrap_or("<none>");
+    let requested_first = identifiers.first().map(String::as_str).unwrap_or("<none>");
+    logger.log(format!(
+        "airlift: DIAG {manifest} on device: {} byte(s) parsed, {} Books row(s), first Persistent ID={first_id} (we requested {requested_first})",
+        bytes.len(),
+        rows.len()
+    ));
+    for (n, row) in rows.iter().enumerate() {
+        let id = row
+            .as_dictionary()
+            .and_then(|d| d.get("Persistent ID"))
+            .and_then(plist::Value::as_string)
+            .unwrap_or("<none>");
+        let item = row
+            .as_dictionary()
+            .and_then(|d| d.get("Item ID"))
+            .and_then(plist::Value::as_string)
+            .unwrap_or("<none>");
+        let dsid = row
+            .as_dictionary()
+            .and_then(|d| d.get("DSID"))
+            .and_then(plist::Value::as_string)
+            .unwrap_or("<none>");
+        logger.log(format!(
+            "airlift: DIAG {manifest} row {n}: Persistent ID={id} Item ID={item} DSID={dsid}"
         ));
     }
 }
@@ -2518,6 +2831,7 @@ async fn research_pull_list_and_restore(
     target_abs: &str,
     item_base: u64,
     dataclass: &str,
+    sync_root: &SyncRoot,
     logger: &Logger,
 ) -> Result<String, String> {
     let (parent, basename) = research_parent_and_basename(target_abs)?;
@@ -2527,7 +2841,7 @@ async fn research_pull_list_and_restore(
     let read_dir = format!("{AIRLOCK_READ}/{token}");
     let record_path = format!("{read_dir}.json");
 
-    let asset_id_pull = research_asset_id_for_device_path(target_abs)?;
+    let asset_id_pull = research_asset_id_for_device_path(target_abs, sync_root.depth)?;
     let asset_id_link = media_asset_id(&format!("{pull_dir}/{LINK_ENTRY}"));
     let asset_id_read = media_asset_id(&read_dir);
 
@@ -2585,11 +2899,12 @@ async fn research_pull_list_and_restore(
         "airlift: STEP B manifest carries {} preserved catalog row(s) plus 1 requested row",
         preserved_pull.len()
     ));
-    if let Err(e) = write_books_plist(
+    if let Err(e) = research_write_sync_plist(
         &mut afc,
         std::slice::from_ref(&asset_id_pull),
         &preserved_pull,
         item_base,
+        sync_root,
         logger,
     )
     .await
@@ -2728,11 +3043,12 @@ async fn research_pull_list_and_restore(
         // STEP C is its own ATC session, so it needs its own `Item ID` base:
         // reusing STEP B's pair would have iOS drop both restore rows.
         let step_c_item_base = new_item_base();
-        write_books_plist(
+        research_write_sync_plist(
             &mut afc,
             &[asset_id_link.clone(), asset_id_read.clone()],
             &preserved_c,
             step_c_item_base,
+            sync_root,
             logger,
         )
         .await?;
@@ -3162,6 +3478,22 @@ pub unsafe fn research_list_dir(
 /// sites. This is the entry point a dataclass sweep wants, because the root-
 /// relative `AssetID` is what makes a non-`/var/mobile` target expressible.
 ///
+/// `sync_root_dir` is the AFC-relative sync directory of that dataclass, e.g.
+/// `"Music/Sync"`. It exists because the wire dataclass alone is not enough to
+/// ask about another dataclass's sync: the daemon resolves an `AssetID` relative
+/// to the sync directory, and the manifest has to be written into *that*
+/// directory's catalog — so without this the run would write
+/// `Books/Sync/Books.plist` while asking for `Music`, which measures nothing.
+/// NULL, "" or `"Books/Sync"` all mean [`default_sync_root`]; any other string
+/// is sanitised and turned into a [`SyncRoot`] by [`sync_root_for_dir`], whose
+/// `depth` fixes the `../` count of the STEP B `AssetID`.
+///
+/// The derived root is a **guess** — as of 2026-10-07 no non-`Book` AirTraffic
+/// sync root is known, and this parameter exists so the sweep can *test* the
+/// guess rather than be guaranteed-inconclusive without it. A non-default root
+/// is logged once, as `derived, UNTESTED`, before the session starts, and its
+/// state files are not snapshotted (see [`research_write_sync_plist`]).
+///
 /// RESEARCH ONLY, on a device we own. Never call this from a UI path.
 ///
 /// # Safety
@@ -3174,6 +3506,7 @@ pub unsafe fn research_list_dir_any_path(
     out_json: *mut *mut c_char,
     out_error: *mut *mut c_char,
     dataclass: *const c_char,
+    sync_root_dir: *const c_char,
 ) -> i32 {
     if out_json.is_null() && out_error.is_null() {
         return 2;
@@ -3181,11 +3514,18 @@ pub unsafe fn research_list_dir_any_path(
     let pairing_path = opt_str(pairing_path, "airlift_pairing.plist");
     let requested = opt_str(path, "");
     let dataclass = resolve_dataclass(&opt_str(dataclass, ""));
+    let sync_root = sync_root_for_dir(&opt_str(sync_root_dir, ""));
     let ctx_usize = ctx as usize;
 
     let res = run_with_large_stack("al_research_list_dir_any_path", move || {
         let logger = Logger::new(log_cb, ctx_usize as *mut c_void);
         let target = research_checked_path(&requested)?;
+        if sync_root != default_sync_root() {
+            logger.log(format!(
+                "airlift: research sync root '{}' (manifest '{}', depth {}) — derived, UNTESTED",
+                sync_root.dir, sync_root.manifest, sync_root.depth
+            ));
+        }
         // One ATC sync at a time, process-wide, shared with the AFC browser.
         let _guard = lock_tunnel("al_research_list_dir_any_path");
         idevice_ffi::run_sync_local(research_pull_list_and_restore(
@@ -3193,6 +3533,7 @@ pub unsafe fn research_list_dir_any_path(
             &target,
             new_item_base(),
             &dataclass,
+            &sync_root,
             &logger
         ))
     });
@@ -3242,8 +3583,10 @@ mod tests {
     use super::{
         asset_id_for_device_path, build_pull_manifest, checked_pull_path,
         link_target_for_parent, media_asset_id, parent_and_basename, preserved_rows,
-        research_asset_id_for_device_path, BackupState, BooksSyncBackup, RecoveryRecord,
-        SyncDiag, BOOK_DATACLASS, BOOKS_PLIST, SYNC_DIR_DEPTH,
+        default_sync_root, research_asset_id_for_device_path, sync_root_for, sync_root_for_dir,
+        BackupState,
+        BooksSyncBackup, RecoveryRecord, SyncDiag, SyncRoot, BOOK_DATACLASS, BOOKS_PLIST,
+        SYNC_DIR_DEPTH,
     };
 
     const UUID_DIR: &str = "/var/mobile/Containers/Data/Application/DEADBEEF-0000-0000-0000-000000000000/Documents";
@@ -3364,7 +3707,7 @@ mod tests {
             "/var/mobile/Library/Preferences",
         ] {
             let shipping = asset_id_for_device_path(abs).unwrap();
-            let research = research_asset_id_for_device_path(abs).unwrap();
+            let research = research_asset_id_for_device_path(abs, SYNC_DIR_DEPTH).unwrap();
             assert_ne!(
                 shipping, research,
                 "{abs}: the two spellings are expected to differ"
@@ -3418,7 +3761,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                research_asset_id_for_device_path(abs).unwrap(),
+                research_asset_id_for_device_path(abs, SYNC_DIR_DEPTH).unwrap(),
                 expected,
                 "{abs}: wrong root-relative AssetID"
             );
@@ -3427,7 +3770,7 @@ mod tests {
             assert_eq!(resolve_from_sync_dir(expected), abs);
             // A trailing slash is not a component.
             assert_eq!(
-                research_asset_id_for_device_path(&format!("{abs}/")).unwrap(),
+                research_asset_id_for_device_path(&format!("{abs}/"), SYNC_DIR_DEPTH).unwrap(),
                 expected
             );
         }
@@ -3452,25 +3795,157 @@ mod tests {
             "/var/containers/./Data",
         ] {
             assert!(
-                research_asset_id_for_device_path(bad).is_err(),
+                research_asset_id_for_device_path(bad, SYNC_DIR_DEPTH).is_err(),
                 "{bad:?} must not produce an AssetID"
             );
         }
         // The five-segment prefix is the whole climb: nothing here ever emits a
         // sixth `..`, which would leave the filesystem root.
         for abs in ["/var/containers/Data/System", "/Library/MobileDevice/x"] {
-            let id = research_asset_id_for_device_path(abs).unwrap();
+            let id = research_asset_id_for_device_path(abs, SYNC_DIR_DEPTH).unwrap();
             assert_eq!(id.matches("../").count(), SYNC_DIR_DEPTH, "{id}");
             assert!(id.starts_with(&"../".repeat(SYNC_DIR_DEPTH)));
             assert!(!id.starts_with(&"../".repeat(SYNC_DIR_DEPTH + 1)));
         }
     }
 
+    /// `Book` resolves against the canonical Books root, so the default root
+    /// has to reproduce today's `BOOKS_PLIST`/`SYNC_DIR_DEPTH` exactly — not
+    /// merely something plausible, or the research sweep silently becomes a
+    /// second shipping configuration.
+    #[test]
+    fn the_book_sync_root_is_todays_books_root() {
+        let book = sync_root_for(BOOK_DATACLASS);
+        assert_eq!(book, default_sync_root());
+        assert_eq!(book.dir, "Books/Sync");
+        assert_eq!(book.manifest, BOOKS_PLIST);
+        assert_eq!(book.manifest, "Books/Sync/Books.plist");
+        assert_eq!(book.depth, SYNC_DIR_DEPTH);
+        // …and the dir it derives is the same one the shipping path hard-codes,
+        // because `SYNC_STATE_FILES`/`OUTSTANDING_DIRS` are spelled `Books/…`.
+        assert_eq!(sync_root_for_dir("Books/Sync"), book);
+        assert_eq!(sync_root_for_dir(""), book, "NULL/empty means the default");
+        assert_eq!(sync_root_for(""), book, "so does an empty dataclass");
+        assert_eq!(sync_root_for("book"), book, "case-insensitively Book");
+        assert_eq!(sync_root_for("  Book  "), book, "and after trimming");
+    }
+
+    /// The derivation the whole sweep rests on: a dataclass gets its own
+    /// `<Name>/Sync` root and a catalog named after the same dataclass, at the
+    /// same depth Books has. This is a **guess** — see [`SyncRoot`] — so the test
+    /// pins the guess rather than vouching for it.
+    #[test]
+    fn a_non_book_dataclass_gets_its_own_derived_root() {
+        let books = default_sync_root();
+        let music = sync_root_for("Music");
+        assert_eq!(music.dir, "Music/Sync");
+        assert_eq!(music.manifest, "Music/Sync/Music.plist");
+        assert_eq!(music.depth, books.depth, "Media/<Name>/Sync is as deep as Media/Books/Sync");
+        assert_ne!(music.manifest, BOOKS_PLIST, "a Music sweep must not write Books.plist");
+
+        let podcast = sync_root_for("Podcast");
+        assert_eq!(
+            podcast,
+            SyncRoot {
+                dir: "Podcast/Sync".to_owned(),
+                manifest: "Podcast/Sync/Podcast.plist".to_owned(),
+                depth: books.depth,
+            }
+        );
+        assert_eq!(sync_root_for("Music").manifest, sync_root_for_dir("Music/Sync").manifest);
+    }
+
+    /// Odd input must produce a *usable* root, never a panic and never a path
+    /// that escapes `/var/mobile/Media`.
+    #[test]
+    fn odd_dataclass_names_still_yield_a_sane_sync_root() {
+        for (dataclass, expected) in [
+            ("book", default_sync_root()),
+            ("Podcast", sync_root_for("Podcast")),
+            ("App", sync_root_for("App")),
+            // Nothing survives the sanitiser, so this lands on the default
+            // rather than on a `Media//Sync` with a depth of nothing.
+            ("../..", default_sync_root()),
+            ("///", default_sync_root()),
+            ("-leading-dash", default_sync_root()),
+        ] {
+            let root = sync_root_for(dataclass);
+            assert_eq!(root, expected, "{dataclass:?}");
+            assert!(
+                !root.dir.starts_with('/') && !root.dir.contains("..") && !root.dir.contains("//"),
+                "{dataclass:?} produced {dir:?}",
+                dir = root.dir
+            );
+            assert_eq!(root.depth, 3 + root.dir.split('/').count());
+        }
+    }
+
+    /// The `..` invariant, end to end through the new derivation: a caller can
+    /// name a dataclass, but cannot move the `..` chain an `AssetID` is built
+    /// from. Every `..` still comes from `"../".repeat(depth)`.
+    #[test]
+    fn a_caller_supplied_dot_dot_cannot_reach_an_asset_id() {
+        for dataclass in [
+            "../../etc",
+            "..",
+            "Books/../../Sync",
+            "/var/mobile/../../../etc/passwd",
+            "Music/Sync/../../Books",
+        ] {
+            let root = sync_root_for(dataclass);
+            for field in [&root.dir, &root.manifest] {
+                assert!(
+                    !field.split('/').any(|c| c == ".." || c == "." || c.is_empty()),
+                    "{dataclass:?} leaked a traversal component into {field:?}"
+                );
+            }
+            let id = research_asset_id_for_device_path("/var/containers/Data/System", root.depth)
+                .unwrap();
+            assert_eq!(id.matches("../").count(), root.depth, "{dataclass:?} → {id}");
+            assert_eq!(
+                id,
+                format!("{}{}", "../".repeat(root.depth), "var/containers/Data/System"),
+                "{dataclass:?}"
+            );
+        }
+    }
+
+    /// A non-default depth is what a non-`Book` sweep actually runs with, so the
+    /// helper has to honour the argument rather than the constant.
+    #[test]
+    fn research_asset_ids_follow_the_sync_roots_depth() {
+        let music = sync_root_for("Music");
+        for abs in [
+            "/var/containers/Shared/SystemGroup/group/Library/Caches/x.plist",
+            "/var/mobile/Containers/Shared/AppGroup",
+            "/var/root/Library",
+        ] {
+            let id = research_asset_id_for_device_path(abs, music.depth).unwrap();
+            assert_eq!(
+                id,
+                format!("{}{}", "../".repeat(music.depth), abs.trim_start_matches('/')),
+                "the Music root must climb {depth} level(s) and name {abs} in full",
+                depth = music.depth
+            );
+            // Same spelling as the default root only because the derived depth
+            // happens to match; that is the guess, and it is what makes a
+            // `Music` sweep comparable with a `Book` one.
+            assert_eq!(
+                research_asset_id_for_device_path(abs, default_sync_root().depth).unwrap(),
+                id
+            );
+        }
+        // A depth that is not the default is honoured, not clamped.
+        let shallow = research_asset_id_for_device_path("/var/root/Library", 3).unwrap();
+        assert_eq!(shallow, "../../../var/root/Library");
+        assert_eq!(shallow.matches("../").count(), 3);
+    }
+
     /// The research driver is a copy, and a copy rots the moment somebody fixes
     /// one side and forgets the other. This pins the *whole* difference between
-    /// the two bodies: the name and the two helper calls. Anything else that
-    /// drifts — a new early return, a missing `clean_outstanding`, a different
-    /// restore order — has to show up here.
+    /// the two bodies: the name, the two helper calls and the sync-root
+    /// threading. Anything else that drifts — a new early return, a missing
+    /// `clean_outstanding`, a different restore order — has to show up here.
     #[test]
     fn the_research_driver_is_a_copy_of_the_shipping_one() {
         /// One top-level `fn` body, from its signature to the `\n}\n` that
@@ -3487,11 +3962,25 @@ mod tests {
         let shipping = body_of(source, "async fn pull_list_and_restore(");
         let research = body_of(source, "async fn research_pull_list_and_restore(");
 
-        // Fold the two name differences away; whatever is left has to match.
+        // Fold the differences away; whatever is left has to match. There are
+        // four of them, and the last two are the sync-root threading:
+        // the two id helpers plus the research manifest writer, which takes a
+        // `&SyncRoot` the shipping one has no way to know about. Folding those
+        // away is only safe because the assertions below pin *every* one of
+        // them: a copy that quietly stopped threading the root, or grew an
+        // extra call site, still fails here.
         let folded = research
             .replace("research_pull_list_and_restore", "pull_list_and_restore")
             .replace("research_parent_and_basename", "parent_and_basename")
-            .replace("research_asset_id_for_device_path", "asset_id_for_device_path");
+            .replace("research_asset_id_for_device_path", "asset_id_for_device_path")
+            .replace("research_write_sync_plist", "write_books_plist")
+            // The copy's `AssetID` is resolved from the sweep's root, not `Books/Sync`.
+            .replace("(target_abs, sync_root.depth)", "(target_abs)")
+            // …and the parameter and arguments that carry it. Longest first:
+            // the 8-space pattern is a suffix of the 12-space one.
+            .replace("    sync_root: &SyncRoot,\n", "")
+            .replace("            sync_root,\n", "")
+            .replace("        sync_root,\n", "");
         if folded != shipping {
             let folded_lines: Vec<&str> = folded.lines().collect();
             let shipping_lines: Vec<&str> = shipping.lines().collect();
@@ -3514,19 +4003,23 @@ mod tests {
             );
         }
 
-        // …and folding only *added* the two id helpers: nothing in the copy may
-        // quietly fall back to the `/var/mobile`-relative pair. Strip the research
-        // spellings first — `parent_and_basename(` is a substring of
+        // …and folding only *added* the research helpers: nothing in the copy
+        // may quietly fall back to the `/var/mobile`-relative pair, and nothing
+        // may keep writing the manifest into `Books/Sync` when the caller asked
+        // for another dataclass's root. Strip the research spellings first —
+        // `parent_and_basename(` is a substring of
         // `research_parent_and_basename(`, so a naive search never matches.
         let bare = research
             .replace("research_parent_and_basename(", "()")
-            .replace("research_asset_id_for_device_path(", "()");
+            .replace("research_asset_id_for_device_path(", "()")
+            .replace("research_write_sync_plist(", "()");
         for (helper, research_helper) in [
             ("parent_and_basename(", "research_parent_and_basename("),
             (
                 "asset_id_for_device_path(",
                 "research_asset_id_for_device_path(",
             ),
+            ("write_books_plist(", "research_write_sync_plist("),
         ] {
             assert_eq!(
                 shipping.matches(helper).count(),
@@ -3548,6 +4041,10 @@ mod tests {
         // The restore symlink is unchanged: `link_target_for_parent` was already
         // generic, which is why only the AssetID needed the research variant.
         assert!(research.contains("link_target_for_parent(&parent)"));
+        // The sync root reaches the STEP B `AssetID` and every manifest write,
+        // and it is the *only* thing the fold above had to strip.
+        assert_eq!(research.matches("sync_root").count(), 4, "{research}");
+        assert!(!shipping.contains("sync_root"), "{shipping}");
     }
 
     #[test]
