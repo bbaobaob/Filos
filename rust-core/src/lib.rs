@@ -577,6 +577,12 @@ pub unsafe extern "C" fn al_airlift_recover(
 /// See RESEARCH.md. Intended for a device we own; reachable from no UI path,
 /// never wired to one.
 ///
+/// `dataclass` names the AirTraffic dataclass to put on the wire (NULL or ""
+/// means `"Book"`, the only dataclass known to work as of 2026-10-07). Any other
+/// string is sent verbatim at all five handshake sites, so one sweep tells
+/// "refused" from "accepted but silently did nothing"; every diagnostic line
+/// names the dataclass in use.
+///
 /// # Safety
 /// All pointer arguments must be null or valid for their documented use.
 #[no_mangle]
@@ -587,9 +593,12 @@ pub unsafe extern "C" fn al_research_list_dir(
     ctx: *mut c_void,
     out_json: *mut *mut c_char,
     out_error: *mut *mut c_char,
+    dataclass: *const c_char,
 ) -> i32 {
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        airlift_dir::research_list_dir(pairing_path, path, log_cb, ctx, out_json, out_error)
+        airlift_dir::research_list_dir(
+            pairing_path, path, log_cb, ctx, out_json, out_error, dataclass,
+        )
     }));
     match res {
         Ok(rc) => rc,
@@ -625,6 +634,11 @@ pub unsafe extern "C" fn al_research_list_dir(
 /// See RESEARCH.md. Intended for a device we own; reachable from no UI path,
 /// never wired to one.
 ///
+/// `dataclass` is as for [`al_research_list_dir`]: NULL or "" means `"Book"`,
+/// anything else goes verbatim onto all five handshake sites. This is the entry
+/// point a dataclass sweep wants, because the root-relative `AssetID` is what
+/// makes a target outside `/var/mobile` expressible at all.
+///
 /// # Safety
 /// All pointer arguments must be null or valid for their documented use.
 #[no_mangle]
@@ -635,10 +649,11 @@ pub unsafe extern "C" fn al_research_list_dir_any_path(
     ctx: *mut c_void,
     out_json: *mut *mut c_char,
     out_error: *mut *mut c_char,
+    dataclass: *const c_char,
 ) -> i32 {
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         airlift_dir::research_list_dir_any_path(
-            pairing_path, path, log_cb, ctx, out_json, out_error,
+            pairing_path, path, log_cb, ctx, out_json, out_error, dataclass,
         )
     }));
     match res {

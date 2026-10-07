@@ -102,6 +102,18 @@ const BOOKS_PLIST: &str = "Books/Sync/Books.plist";
 /// Zip entry holding the restore symlink inside the staged MediaSubdir.
 const LINK_ENTRY: &str = "p0/p1/p2/link";
 
+/// The AirTraffic dataclass every shipping session puts on the wire.
+///
+/// `Book` is not a policy choice, it is the only dataclass anyone has ever
+/// observed this primitive working with: libimobiledevice's airlift, AirCard
+/// and AirManager all hard-code it, and this file did too. It is a constant now
+/// only so the *research* path can name a different one (see
+/// [`BOOK_DATACLASS`]'s users and [`atc_dataclass_wire`]) — every shipping call
+/// site passes this value, so the bytes on the wire are unchanged.
+///
+/// As of 2026-10-07 no public PoC has ever sent anything else.
+pub const BOOK_DATACLASS: &str = "Book";
+
 /// Sync metadata that is snapshotted before, and restored after, every step.
 ///
 /// `Books/Sync/Books.plist` is the catalog the daemon parses, so it is the one
@@ -1329,9 +1341,13 @@ async fn log_books_plist_on_device(
 /// pull never showed up.
 #[derive(Default)]
 struct SyncDiag {
+    /// The dataclass the session asked for, so a log line from a `Music` sweep
+    /// cannot be confused with one from a `Book` sweep.
+    dataclass: String,
     ready_observed: bool,
     manifest_observed: bool,
-    /// `AssetID`/`IsDownload` of every `Book` entry the device sent back.
+    /// `AssetID`/`IsDownload` of every entry the device sent back under
+    /// `dataclass`.
     manifest_entries: Vec<String>,
     /// Verbatim `SyncFailed` payloads, which carry the daemon's real reason.
     sync_notices: Vec<String>,
@@ -1340,7 +1356,12 @@ struct SyncDiag {
 impl SyncDiag {
     fn summary(&self) -> String {
         format!(
-            "ReadyForSync={} AssetManifest={} manifest entries=[{}] SyncFailed notices={} [{}]",
+            "Dataclass={} ReadyForSync={} AssetManifest={} manifest entries=[{}] SyncFailed notices={} [{}]",
+            if self.dataclass.is_empty() {
+                BOOK_DATACLASS
+            } else {
+                self.dataclass.as_str()
+            },
             self.ready_observed,
             self.manifest_observed,
             self.manifest_entries.join(", "),
@@ -1350,23 +1371,28 @@ impl SyncDiag {
     }
 }
 
-/// `AssetID`/`IsDownload` of every `Book` entry in an `AssetManifest` payload.
+/// `AssetID`/`IsDownload` of every entry in the `dataclass` array of an
+/// `AssetManifest` payload.
 ///
 /// This is the check that explains "it moved once, then never again": the
 /// device echoes what it believes is pending, and a requested id that comes back
 /// with `IsDownload=false` (or not at all) means our `Books.plist` was not read
 /// as a download request.
-fn manifest_entry_ids(dict: &plist::Dictionary) -> Vec<String> {
+///
+/// The array is looked up under *the dataclass the session asked for*, not under
+/// `Book` — a sweep over `Music` has to read `Music` or it would report an empty
+/// manifest while the device was in fact answering with entries.
+fn manifest_entry_ids(dict: &plist::Dictionary, dataclass: &str) -> Vec<String> {
     let Some(params) = dict.get("Params").and_then(|p| p.as_dictionary()) else {
         return Vec::new();
     };
     let Some(manifest) = params.get("AssetManifest").and_then(|m| m.as_dictionary()) else {
         return Vec::new();
     };
-    let Some(books) = manifest.get("Book").and_then(|b| b.as_array()) else {
+    let Some(entries) = manifest.get(dataclass).and_then(|b| b.as_array()) else {
         return Vec::new();
     };
-    books
+    entries
         .iter()
         .map(|entry| {
             let Some(row) = entry.as_dictionary() else {
@@ -1384,6 +1410,24 @@ fn manifest_entry_ids(dict: &plist::Dictionary) -> Vec<String> {
             format!("{id} {download}")
         })
         .collect()
+}
+
+/// The keys an `AssetManifest` payload actually arrived with.
+///
+/// This is the difference between "the device refused the dataclass" and "the
+/// device answered, under a different dataclass than we asked for" — the single
+/// most valuable thing a dataclass sweep can print, because an answer keyed
+/// `Music` when we sent `Book` (or vice versa) says the daemon is negotiating
+/// rather than refusing, and an answer keyed `Book` while we sent `Music` says
+/// `Books.plist` and the `Dataclass` field disagree.
+fn manifest_keys(dict: &plist::Dictionary) -> Vec<String> {
+    let Some(params) = dict.get("Params").and_then(|p| p.as_dictionary()) else {
+        return Vec::new();
+    };
+    let Some(manifest) = params.get("AssetManifest").and_then(|m| m.as_dictionary()) else {
+        return Vec::new();
+    };
+    manifest.keys().cloned().collect()
 }
 
 /// Log `Params/DataProtected` whenever a dict carries it.
@@ -1421,6 +1465,113 @@ fn log_session_diag(label: &str, diag: &SyncDiag, logger: &Logger) {
     }
 }
 
+/// The dataclass an AirTraffic session names, as the five wire values that carry
+/// it.
+///
+/// One field per site [`atc_asset_sync`] writes, holding exactly the
+/// `plist::Value` it inserts there — so this is not a second description of the
+/// handshake, it *is* the handshake's dataclass half, built once and consumed by
+/// the send path. The one place the dataclass is *not* a value is
+/// [`sync_types`](Self::sync_types), where it is the dictionary key (that is what
+/// `SyncTypes` is: a key/value map, not a list).
+// No `Eq`: `plist::Dictionary` is only `PartialEq`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AtcDataclassWire {
+    /// `HostInfo` → `SyncedDataclasses` (array of one).
+    pub synced_dataclasses: plist::Value,
+    /// `HostInfo` → `SyncedAssetTypes` (array of one).
+    pub synced_asset_types: plist::Value,
+    /// `RequestingSync` → `Dataclasses` (array of one).
+    pub dataclasses: plist::Value,
+    /// `FinishedSyncingMetadata` → `SyncTypes` (`{<dataclass>: 1}`).
+    pub sync_types: plist::Dictionary,
+    /// `FileComplete` → `Dataclass` (bare string).
+    pub file_complete: plist::Value,
+}
+
+/// Build the five dataclass wire values for `dataclass`.
+///
+/// `dataclass` is passed through verbatim — there is deliberately no allow-list
+/// (see [`resolve_dataclass`]), because the question this exists to answer is
+/// exactly what the device does with a dataclass nobody has ever sent.
+pub fn atc_dataclass_wire(dataclass: &str) -> AtcDataclassWire {
+    let dataclass = resolve_dataclass(dataclass);
+    let one = plist::Value::Array(vec![plist::Value::String(dataclass.clone())]);
+    let mut sync_types = plist::Dictionary::new();
+    sync_types.insert(dataclass.clone(), plist::Value::Integer(1.into()));
+    AtcDataclassWire {
+        synced_dataclasses: one.clone(),
+        synced_asset_types: one.clone(),
+        dataclasses: one,
+        sync_types,
+        file_complete: plist::Value::String(dataclass),
+    }
+}
+
+/// The five dataclass-carrying fields of one ATC session, in the order they go
+/// out, as `(field, value)` pairs.
+///
+/// Read back out of [`atc_dataclass_wire`] rather than re-spelled, so this cannot
+/// drift from the bytes the session sends. `SyncTypes` is reported by its key
+/// (the only site where the dataclass is not a value).
+pub fn atc_dataclass_strings(dataclass: &str) -> [(String, String); 5] {
+    let wire = atc_dataclass_wire(dataclass);
+    let first = |value: &plist::Value| {
+        value
+            .as_array()
+            .and_then(|array| array.first())
+            .and_then(plist::Value::as_string)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    [
+        (
+            "HostInfo/SyncedDataclasses".to_owned(),
+            first(&wire.synced_dataclasses),
+        ),
+        (
+            "HostInfo/SyncedAssetTypes".to_owned(),
+            first(&wire.synced_asset_types),
+        ),
+        (
+            "RequestingSync/Dataclasses".to_owned(),
+            first(&wire.dataclasses),
+        ),
+        (
+            "FinishedSyncingMetadata/SyncTypes".to_owned(),
+            wire.sync_types
+                .keys()
+                .next()
+                .cloned()
+                .unwrap_or_else(|| "<no key>".to_owned()),
+        ),
+        (
+            "FileComplete/Dataclass".to_owned(),
+            wire.file_complete
+                .as_string()
+                .unwrap_or_default()
+                .to_owned(),
+        ),
+    ]
+}
+
+/// The dataclass a caller asked for, with "not asked" collapsed to the shipping
+/// one.
+///
+/// Empty (or NULL at the FFI boundary) means [`BOOK_DATACLASS`]. Anything else is
+/// returned **verbatim** — there is no allow-list, on purpose: the open question
+/// is what `com.apple.atc` does with `Music`, `App`, `Podcast` and names nobody
+/// has tried, and a spelling this file invented would answer a different
+/// question. The dataclass in use is on every diagnostic line, so a sweep is
+/// greppable per dataclass.
+pub fn resolve_dataclass(requested: &str) -> String {
+    if requested.is_empty() {
+        BOOK_DATACLASS.to_owned()
+    } else {
+        requested.to_owned()
+    }
+}
+
 /// The AirTraffic handshake plus one `FileComplete` per asset, all in one
 /// session — byte-for-byte the sequence the proven write path drives:
 ///
@@ -1431,10 +1582,20 @@ fn log_session_diag(label: &str, diag: &SyncDiag, logger: &Logger) {
 /// `identifiers` and `destinations` are parallel and must have the same
 /// length; the order is significant (the symlink has to be in place before the
 /// directory is dropped through it), hence the fixed pause between messages.
+///
+/// `dataclass` names the sync class on **all five** sites that carry it
+/// ([`atc_dataclass_strings`]) and is caller-controlled: [`BOOK_DATACLASS`] for
+/// every shipping session, whatever the research path was handed for the sweep.
+/// There is no branching on it anywhere — a different dataclass goes out on
+/// exactly the same wire, which is the only way the answer to "does the device
+/// accept it?" means anything. As of 2026-10-07 `Book` is the only dataclass
+/// known to work on device; nothing else has ever been tried, so a refusal is
+/// far more likely than a second sandbox escape.
 async fn atc_asset_sync(
     tunnel: &mut AppDeviceTunnel,
     identifiers: &[String],
     destinations: &[String],
+    dataclass: &str,
     label: &str,
     logger: &Logger,
     diag: &mut SyncDiag,
@@ -1446,6 +1607,14 @@ async fn atc_asset_sync(
             destinations.len()
         ));
     }
+    // Resolved once, here: a session that was handed no dataclass must still put
+    // the shipping one on the wire and must name it in every line it logs, so
+    // "empty" can never be what the device is asked for.
+    let dataclass = resolve_dataclass(dataclass);
+    // The five dataclass values this session will send, built once so the
+    // handshake below cannot spell one of them differently.
+    let wire = atc_dataclass_wire(&dataclass);
+    diag.dataclass = dataclass.clone();
 
     let mut atc_stream = tunnel.connect_service("com.apple.atc", logger).await?;
 
@@ -1514,11 +1683,11 @@ async fn atc_asset_sync(
     host_info_dict.insert("LibraryID".into(), plist::Value::String(library_id));
     host_info_dict.insert(
         "SyncedDataclasses".into(),
-        plist::Value::Array(vec![plist::Value::String("Book".into())]),
+        wire.synced_dataclasses.clone(),
     );
     host_info_dict.insert(
         "SyncedAssetTypes".into(),
-        plist::Value::Array(vec![plist::Value::String("Book".into())]),
+        wire.synced_asset_types.clone(),
     );
     host_info_dict.insert("Wakeable".into(), plist::Value::Boolean(false));
 
@@ -1536,10 +1705,7 @@ async fn atc_asset_sync(
 
     // RequestingSync (Session = 1)
     let mut sync_req_params = plist::Dictionary::new();
-    sync_req_params.insert(
-        "Dataclasses".into(),
-        plist::Value::Array(vec![plist::Value::String("Book".into())]),
-    );
+    sync_req_params.insert("Dataclasses".into(), wire.dataclasses.clone());
     sync_req_params.insert(
         "DataclassAnchors".into(),
         plist::Value::Dictionary(plist::Dictionary::new()),
@@ -1591,10 +1757,11 @@ async fn atc_asset_sync(
     }
 
     // FinishedSyncingMetadata (Session = 1)
-    let mut sync_types = plist::Dictionary::new();
-    sync_types.insert("Book".into(), plist::Value::Integer(1.into()));
     let mut meta_params = plist::Dictionary::new();
-    meta_params.insert("SyncTypes".into(), plist::Value::Dictionary(sync_types));
+    meta_params.insert(
+        "SyncTypes".into(),
+        plist::Value::Dictionary(wire.sync_types.clone()),
+    );
     meta_params.insert(
         "DataclassAnchors".into(),
         plist::Value::Dictionary(plist::Dictionary::new()),
@@ -1619,7 +1786,24 @@ async fn atc_asset_sync(
                     if name == "AssetManifest" {
                         manifest_observed = true;
                         diag.manifest_observed = true;
-                        diag.manifest_entries = manifest_entry_ids(&dict);
+                        diag.manifest_entries = manifest_entry_ids(&dict, &dataclass);
+                        // Which dataclasses came back, named — an empty
+                        // manifest_entries is otherwise indistinguishable from
+                        // "the daemon sent entries for a class we did not ask
+                        // for".
+                        let keys = manifest_keys(&dict);
+                        if !keys.is_empty() {
+                            logger.log(format!(
+                                "airlift: {label}: atc AssetManifest keys present = [{}]",
+                                keys.join(", ")
+                            ));
+                            if !keys.iter().any(|key| key == &dataclass) {
+                                logger.log(format!(
+                                    "airlift: {label}: atc AssetManifest has no '{dataclass}' array; keys present = [{}]",
+                                    keys.join(", ")
+                                ));
+                            }
+                        }
                         log_session_diag(label, diag, logger);
                         break;
                     }
@@ -1651,14 +1835,16 @@ async fn atc_asset_sync(
     for (index, (asset_id, asset_path)) in identifiers.iter().zip(destinations.iter()).enumerate() {
         // Machine-greppable: the exact AssetID/AssetPath pair is the whole
         // primitive, so a wrong id or a wrong base has to be one grep away.
+        // `Dataclass` rides along for the same reason — a dataclass sweep is
+        // only readable if each FileComplete names the class it was sent under.
         logger.log(format!(
-            "airlift: DIAG {label}: FileComplete [{}/{}] AssetID={asset_id} AssetPath={asset_path}",
+            "airlift: DIAG {label}: FileComplete [{}/{}] AssetID={asset_id} AssetPath={asset_path} Dataclass={dataclass}",
             index + 1,
             identifiers.len()
         ));
         let mut file_complete_params = plist::Dictionary::new();
         file_complete_params.insert("AssetID".into(), plist::Value::String(asset_id.clone()));
-        file_complete_params.insert("Dataclass".into(), plist::Value::String("Book".into()));
+        file_complete_params.insert("Dataclass".into(), wire.file_complete.clone());
         file_complete_params.insert("AssetPath".into(), plist::Value::String(asset_path.clone()));
         send_atc_dict(
             &mut atc_stream,
@@ -1986,6 +2172,7 @@ async fn pull_list_and_restore(
     pairing_path: &str,
     target_abs: &str,
     item_base: u64,
+    dataclass: &str,
     logger: &Logger,
 ) -> Result<String, String> {
     let (parent, basename) = parent_and_basename(target_abs)?;
@@ -2074,6 +2261,7 @@ async fn pull_list_and_restore(
         &mut tunnel,
         std::slice::from_ref(&asset_id_pull),
         &[read_dir.clone()],
+        dataclass,
         "STEP B pull",
         logger,
         &mut step_b_diag,
@@ -2207,6 +2395,7 @@ async fn pull_list_and_restore(
             &mut tunnel,
             &[asset_id_link, asset_id_read],
             &[link_dest.clone(), format!("{link_dest}/{basename}")],
+            dataclass,
             "STEP C restore",
             logger,
             &mut step_c_diag,
@@ -2328,6 +2517,7 @@ async fn research_pull_list_and_restore(
     pairing_path: &str,
     target_abs: &str,
     item_base: u64,
+    dataclass: &str,
     logger: &Logger,
 ) -> Result<String, String> {
     let (parent, basename) = research_parent_and_basename(target_abs)?;
@@ -2416,6 +2606,7 @@ async fn research_pull_list_and_restore(
         &mut tunnel,
         std::slice::from_ref(&asset_id_pull),
         &[read_dir.clone()],
+        dataclass,
         "STEP B pull",
         logger,
         &mut step_b_diag,
@@ -2549,6 +2740,7 @@ async fn research_pull_list_and_restore(
             &mut tunnel,
             &[asset_id_link, asset_id_read],
             &[link_dest.clone(), format!("{link_dest}/{basename}")],
+            dataclass,
             "STEP C restore",
             logger,
             &mut step_c_diag,
@@ -2709,6 +2901,10 @@ async fn restore_record(
             tunnel,
             &[asset_id_link, asset_id_read],
             &[link_dest.clone(), format!("{link_dest}/{}", record.basename)],
+            // The recover path has no caller to ask: every shipped session has
+            // been `Book`, and a parked directory must be restorable by the same
+            // dataclass that moved it.
+            BOOK_DATACLASS,
             "recover",
             logger,
             &mut recover_diag,
@@ -2858,6 +3054,9 @@ pub unsafe fn list_dir(
             &pairing_path,
             &target,
             new_item_base(),
+            // The shipping list_dir has no dataclass argument and never gets one:
+            // this is exactly the value the hard-coded literal had.
+            BOOK_DATACLASS,
             &logger
         ))
     });
@@ -2888,6 +3087,14 @@ pub unsafe fn list_dir(
 /// measurement of this file's arithmetic rather than of the daemon. Use
 /// [`research_list_dir_any_path`] for them. See RESEARCH.md.
 ///
+/// `dataclass` is the AirTraffic dataclass this pull asks for, threaded to all
+/// five sites of the handshake ([`atc_dataclass_strings`]) with nothing else
+/// changed. NULL or "" means [`BOOK_DATACLASS`]; any other string is sent
+/// verbatim, so a sweep can name `Music`, `App`, `Podcast` or a dataclass
+/// nobody has ever heard of and read the device's answer off the manifest-keys
+/// diagnostic. RESEARCH ONLY: as of 2026-10-07 no dataclass but `Book` has been
+/// observed to work, so this parameter buys measurement, not capability.
+///
 /// RESEARCH ONLY, on a device we own. Never call this from a UI path.
 ///
 /// # Safety
@@ -2899,12 +3106,14 @@ pub unsafe fn research_list_dir(
     ctx: *mut c_void,
     out_json: *mut *mut c_char,
     out_error: *mut *mut c_char,
+    dataclass: *const c_char,
 ) -> i32 {
     if out_json.is_null() && out_error.is_null() {
         return 2;
     }
     let pairing_path = opt_str(pairing_path, "airlift_pairing.plist");
     let requested = opt_str(path, "");
+    let dataclass = resolve_dataclass(&opt_str(dataclass, ""));
     let ctx_usize = ctx as usize;
 
     let res = run_with_large_stack("al_research_list_dir", move || {
@@ -2916,6 +3125,7 @@ pub unsafe fn research_list_dir(
             &pairing_path,
             &target,
             new_item_base(),
+            &dataclass,
             &logger
         ))
     });
@@ -2947,6 +3157,11 @@ pub unsafe fn research_list_dir(
 /// the first run against one of these paths is an experiment, not a known
 /// outcome. See RESEARCH.md.
 ///
+/// `dataclass` behaves exactly as in [`research_list_dir`]: NULL or "" is
+/// [`BOOK_DATACLASS`], anything else goes verbatim onto all five handshake
+/// sites. This is the entry point a dataclass sweep wants, because the root-
+/// relative `AssetID` is what makes a non-`/var/mobile` target expressible.
+///
 /// RESEARCH ONLY, on a device we own. Never call this from a UI path.
 ///
 /// # Safety
@@ -2958,12 +3173,14 @@ pub unsafe fn research_list_dir_any_path(
     ctx: *mut c_void,
     out_json: *mut *mut c_char,
     out_error: *mut *mut c_char,
+    dataclass: *const c_char,
 ) -> i32 {
     if out_json.is_null() && out_error.is_null() {
         return 2;
     }
     let pairing_path = opt_str(pairing_path, "airlift_pairing.plist");
     let requested = opt_str(path, "");
+    let dataclass = resolve_dataclass(&opt_str(dataclass, ""));
     let ctx_usize = ctx as usize;
 
     let res = run_with_large_stack("al_research_list_dir_any_path", move || {
@@ -2975,6 +3192,7 @@ pub unsafe fn research_list_dir_any_path(
             &pairing_path,
             &target,
             new_item_base(),
+            &dataclass,
             &logger
         ))
     });
@@ -3025,7 +3243,7 @@ mod tests {
         asset_id_for_device_path, build_pull_manifest, checked_pull_path,
         link_target_for_parent, media_asset_id, parent_and_basename, preserved_rows,
         research_asset_id_for_device_path, BackupState, BooksSyncBackup, RecoveryRecord,
-        SyncDiag, BOOKS_PLIST, SYNC_DIR_DEPTH,
+        SyncDiag, BOOK_DATACLASS, BOOKS_PLIST, SYNC_DIR_DEPTH,
     };
 
     const UUID_DIR: &str = "/var/mobile/Containers/Data/Application/DEADBEEF-0000-0000-0000-000000000000/Documents";
@@ -3664,7 +3882,7 @@ mod tests {
         dict.insert("Command".to_owned(), plist::Value::String("AssetManifest".to_owned()));
         dict.insert("Params".to_owned(), plist::Value::Dictionary(params));
 
-        let entries = super::manifest_entry_ids(&dict);
+        let entries = super::manifest_entry_ids(&dict, BOOK_DATACLASS);
         assert_eq!(entries.len(), 3);
         assert_eq!(
             entries[0],
@@ -3674,8 +3892,21 @@ mod tests {
         assert_eq!(entries[2], "bare.epub IsDownload=<absent>");
 
         // A payload without Params/AssetManifest must not panic or invent rows.
-        assert!(super::manifest_entry_ids(&plist::Dictionary::new()).is_empty());
+        assert!(super::manifest_entry_ids(&plist::Dictionary::new(), BOOK_DATACLASS).is_empty());
+
+        // The array is looked up under the *requested* dataclass: a `Music`
+        // sweep must read `Music`, or it would report an empty manifest while
+        // the device was answering under the class we asked for. And the keys
+        // are readable so the caller can say which classes did come back.
+        assert!(super::manifest_entry_ids(&dict, "Music").is_empty());
+        assert_eq!(super::manifest_keys(&dict), vec!["Book"]);
+        assert!(super::manifest_keys(&plist::Dictionary::new()).is_empty());
         assert!(SyncDiag::default().summary().contains("ReadyForSync=false"));
+        // The summary names the dataclass so a sweep's lines are attributable.
+        assert!(SyncDiag::default().summary().contains("Dataclass=Book"));
+        let mut music = SyncDiag::default();
+        music.dataclass = "Music".to_owned();
+        assert!(music.summary().contains("Dataclass=Music"));
     }
 
     #[test]

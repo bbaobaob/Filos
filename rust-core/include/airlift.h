@@ -256,6 +256,32 @@ int32_t al_airlift_recover(const char *pairing_path,
                            char **out_json,
                            char **out_error);
 
+// RESEARCH ONLY — al_airlift_list_dir with the app-container allow-list
+// dropped, so an arbitrary absolute device path goes through the same
+// pull/restore dance. `dataclass` is the AirTraffic dataclass to put on the
+// wire; NULL or "" means "Book", which is the only dataclass known to work on
+// device as of 2026-10-07. Any other string is sent verbatim (no allow-list) so
+// a sweep over Music/App/Podcast measures what com.apple.atc actually does.
+// Every diagnostic line names the dataclass in use.
+int32_t al_research_list_dir(const char *pairing_path,
+                             const char *path,
+                             ALLogCallback log_cb,
+                             void *ctx,
+                             char **out_json,
+                             char **out_error,
+                             const char *dataclass);
+
+// RESEARCH ONLY — al_research_list_dir with a root-relative AssetID, so the
+// pull can target a filesystem branch other than /var/mobile. `dataclass` is
+// as for al_research_list_dir: NULL or "" means "Book".
+int32_t al_research_list_dir_any_path(const char *pairing_path,
+                                      const char *path,
+                                      ALLogCallback log_cb,
+                                      void *ctx,
+                                      char **out_json,
+                                      char **out_error,
+                                      const char *dataclass);
+
 // ---------------------------------------------------------------------------
 // Syslog Stream / Live Card Detection
 // ---------------------------------------------------------------------------

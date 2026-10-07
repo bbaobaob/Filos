@@ -20,6 +20,12 @@ use crate::airlift_dir::{
     research_asset_id_for_device_path, research_checked_path, research_parent_and_basename,
 };
 
+// The dataclass sweep helpers are used by the tests in this module only, so they
+// are imported there rather than re-exported: a caller on the device asks for a
+// dataclass through the FFI argument, never by calling `atc_dataclass_wire`.
+#[cfg(test)]
+use crate::airlift_dir::{atc_dataclass_strings, atc_dataclass_wire, resolve_dataclass};
+
 /// The verdict [`research_checked_path`] returns for one input path.
 ///
 /// Exactly one of [`normalized`](PathProbe::normalized) and
@@ -159,7 +165,10 @@ pub fn probe_matrix() -> Vec<(&'static str, PathProbe)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{probe_manifest_ids, probe_manifest_ids_any, probe_matrix, probe_path, PathProbe};
+    use super::{
+        atc_dataclass_strings, atc_dataclass_wire, probe_manifest_ids, probe_manifest_ids_any,
+        probe_matrix, probe_path, resolve_dataclass, PathProbe,
+    };
 
     /// The MobileGestalt cache: the highest-value target the primitive cannot
     /// currently express, and the reason the root-relative `AssetID` exists.
@@ -493,6 +502,115 @@ mod tests {
                 "{input}: AssetID {asset_id} names the staging zone"
             );
             assert!(!link_target.contains("Airlock"));
+        }
+    }
+
+    // -- The dataclass sweep ------------------------------------------------
+    //
+    // The wire values are not re-spelled here: they come out of
+    // `atc_dataclass_strings`, which reads the very `plist` values
+    // `atc_asset_sync` inserts. So these assert what goes on the wire, not what
+    // this file believes goes on the wire.
+
+    /// The default dataclass is `Book`, and at the default every one of the five
+    /// wire sites spells exactly the value the hard-coded literal used to — the
+    /// shipping bytes are unchanged by making the dataclass a parameter.
+    #[test]
+    fn the_default_dataclass_is_book_on_every_wire_site() {
+        assert_eq!(resolve_dataclass(""), "Book");
+        assert_eq!(resolve_dataclass("Book"), "Book");
+
+        for requested in ["", "Book"] {
+            let strings = atc_dataclass_strings(requested);
+            assert_eq!(
+                strings.len(),
+                5,
+                "every dataclass-carrying field has to be accounted for: {strings:?}"
+            );
+            for (field, value) in &strings {
+                assert_eq!(value, "Book", "{requested:?} at {field}");
+            }
+
+            // …and the plist values themselves, not only their spellings:
+            // `SyncedDataclasses`/`SyncedAssetTypes`/`Dataclasses` are one-element
+            // arrays, `SyncTypes` is `{Book: 1}`, `FileComplete/Dataclass` a
+            // bare string.
+            let wire = atc_dataclass_wire(requested);
+            for (field, value) in [
+                ("SyncedDataclasses", &wire.synced_dataclasses),
+                ("SyncedAssetTypes", &wire.synced_asset_types),
+                ("Dataclasses", &wire.dataclasses),
+            ] {
+                assert_eq!(
+                    value,
+                    &plist::Value::Array(vec![plist::Value::String("Book".to_owned())]),
+                    "{field} is no longer a one-element array of the dataclass"
+                );
+            }
+            assert_eq!(
+                wire.sync_types.get("Book"),
+                Some(&plist::Value::Integer(1.into())),
+                "SyncTypes is no longer {{<dataclass>: 1}}"
+            );
+            assert_eq!(
+                wire.sync_types.len(),
+                1,
+                "SyncTypes must carry only the requested dataclass: {:?}",
+                wire.sync_types
+            );
+            assert_eq!(
+                wire.file_complete,
+                plist::Value::String("Book".to_owned())
+            );
+        }
+    }
+
+    /// A non-`Book` dataclass reaches all five sites and leaves no `Book`
+    /// behind — the property the whole sweep rests on. If any site still spelled
+    /// the literal, one of these two assertions fails.
+    #[test]
+    fn a_non_book_dataclass_reaches_all_five_sites() {
+        let strings = atc_dataclass_strings("Music");
+        let fields: Vec<&str> = strings.iter().map(|(field, _)| field.as_str()).collect();
+        assert_eq!(
+            fields,
+            [
+                "HostInfo/SyncedDataclasses",
+                "HostInfo/SyncedAssetTypes",
+                "RequestingSync/Dataclasses",
+                "FinishedSyncingMetadata/SyncTypes",
+                "FileComplete/Dataclass",
+            ],
+            "the five sites are the whole primitive; a sixth or a reordering \
+             means the sweep would be measuring something else"
+        );
+        for (field, value) in &strings {
+            assert_eq!(value, "Music", "{field} still sends the old dataclass");
+            assert!(!value.contains("Book"), "{field} leaked a Book: {value}");
+        }
+
+        let wire = atc_dataclass_wire("Music");
+        assert_eq!(wire.sync_types.keys().collect::<Vec<_>>(), vec!["Music"]);
+        assert!(wire.sync_types.get("Book").is_none());
+    }
+
+    /// No allow-list: an unrecognised dataclass goes out verbatim. Inventing a
+    /// spelling check here would answer a different question than "what does the
+    /// device do with a dataclass nobody has sent".
+    #[test]
+    fn unknown_dataclasses_are_passed_through_verbatim() {
+        for dataclass in ["App", "Podcast", "Movie", "Music", "Book"] {
+            assert_eq!(resolve_dataclass(dataclass), dataclass);
+            for (field, value) in atc_dataclass_strings(dataclass) {
+                assert_eq!(value, dataclass, "{dataclass} at {field}");
+            }
+        }
+
+        // And a name no Apple product has ever used is not normalised away
+        // either — the daemon, not this file, gets to decide.
+        assert_eq!(resolve_dataclass("Nonsense"), "Nonsense");
+        for (_, value) in atc_dataclass_strings("Nonsense") {
+            assert_eq!(value, "Nonsense");
         }
     }
 }
