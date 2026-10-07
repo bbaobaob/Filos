@@ -1,7 +1,10 @@
 # Airlift reach research
 
-RESEARCH ONLY. Everything described here runs against a device we own, is
-reachable from no UI path, and must never be wired to one.
+RESEARCH ONLY. Everything described here runs against a device we own and is
+deliberately research-only. It IS wired to a UI — `Filos/Airlift/ResearchView.swift`,
+reached from Settings → Airlift → "Research sweep" — because the sweep needs a
+human choosing each row and reading the log. That screen says out loud that it is
+a probe for an unfixed Apple bug. Nothing in the browse path calls any of it.
 
 ## The primitive
 

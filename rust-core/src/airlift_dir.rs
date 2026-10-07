@@ -277,8 +277,9 @@ pub(crate) fn research_parent_and_basename(abs: &str) -> Result<(String, String)
 /// like it to move.
 ///
 /// RESEARCH ONLY, on a device we own. This is a measurement instrument, not a
-/// browsing feature: it changes no default, is reachable from no UI, and must
-/// never be wired to one. Note that the guard is only the *request* filter —
+/// browsing feature: it changes no default and no browse path calls it. Reached
+/// only from the research sweep screen, which is labelled as a probe for an
+/// unfixed Apple bug. Note that the guard is only the *request* filter —
 /// `pull_list_and_restore` still derives its `AssetID` relative to
 /// `/var/mobile`, so a path this guard accepts outside `/var/mobile` fails there
 /// before STEP A. [`research_list_dir_any_path`] exists precisely for those

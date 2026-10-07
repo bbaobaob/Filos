@@ -165,6 +165,18 @@ struct SettingsView: View {
                         ButtonLabel("Airlift", symbol: "airplane")
                     }
 
+                    // RESEARCH ONLY — runs the two research FFI entry points
+                    // (`al_research_list_dir`, `al_research_list_dir_any_path`)
+                    // against a path you type in, one row at a time. Probes how
+                    // far com.apple.atc will move a directory it has no business
+                    // touching; nothing in the browse path calls it and it
+                    // changes no default.
+                    NavigationLink {
+                        ResearchView()
+                    } label: {
+                        ButtonLabel("Research sweep", symbol: "scope")
+                    }
+
                     // Browsing an app container / AppGroup / Applications
                     // directory uses the Books AirTraffic sync (pull the
                     // directory to Airlock/Read, list it, push it back), capped

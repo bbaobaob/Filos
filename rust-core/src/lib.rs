@@ -574,8 +574,10 @@ pub unsafe extern "C" fn al_airlift_recover(
 /// floor. Paths that pass are *attempted*; whether the daemon moves them is the
 /// experimental result, not a precondition.
 ///
-/// See RESEARCH.md. Intended for a device we own; reachable from no UI path,
-/// never wired to one.
+/// See RESEARCH.md. Intended for a device we own; a measurement instrument, not a
+/// browsing feature — no browse path calls it. Reached only from the research
+/// sweep screen (`ResearchView`), which is labelled as a probe for an unfixed
+/// Apple bug.
 ///
 /// `dataclass` names the AirTraffic dataclass to put on the wire (NULL or ""
 /// means `"Book"`, the only dataclass known to work as of 2026-10-07). Any other
@@ -631,8 +633,10 @@ pub unsafe extern "C" fn al_research_list_dir(
 ///
 /// UNTESTED ON DEVICE: whether the daemon resolves a `..` chain that climbs past
 /// `/var/mobile` is an open question, so the first run here is an experiment.
-/// See RESEARCH.md. Intended for a device we own; reachable from no UI path,
-/// never wired to one.
+/// See RESEARCH.md. Intended for a device we own; a measurement instrument, not a
+/// browsing feature — no browse path calls it. Reached only from the research
+/// sweep screen (`ResearchView`), which is labelled as a probe for an unfixed
+/// Apple bug.
 ///
 /// `dataclass` is as for [`al_research_list_dir`]: NULL or "" means `"Book"`,
 /// anything else goes verbatim onto all five handshake sites. This is the entry

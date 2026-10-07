@@ -4,7 +4,9 @@
 //
 //  Swift wrapper around the al_dir_list / al_file_read / al_file_write /
 //  al_file_delete / al_list_apps / al_airlift_list_dir / al_airlift_recover /
-//  al_house_* FFI surface. Used by FileBrowserView for the Airlift target paths
+//  al_house_* FFI surface, plus the two RESEARCH-ONLY probes
+//  (al_research_list_dir / al_research_list_dir_any_path, see the Research
+//  section). Used by FileBrowserView for the Airlift target paths
 //  (/var/mobile, /var/tmp, the 12 default targets) since the sandboxed
 //  FileManager cannot see them.
 //
@@ -531,6 +533,120 @@ final class AirLiftBrowse {
             }
             guard let json else {
                 let message = "al_airlift_recover succeeded but returned no JSON"
+                print("[airlift] \(message)")
+                return .failure(message)
+            }
+            return .success(json)
+        }
+    }
+
+    // MARK: - Research (RESEARCH ONLY)
+
+    /// RESEARCH ONLY — `al_research_list_dir`: the Books ATC pull/restore dance
+    /// with the app-container allow-list dropped, so an arbitrary absolute device
+    /// path can be put through it. Reached from `ResearchView` only; nothing in
+    /// the browse path calls this.
+    ///
+    /// `dataclass` is the AirTraffic dataclass to put on the wire, sent verbatim
+    /// (no allow-list) so a sweep over `Music`/`App`/`Podcast` measures what
+    /// `com.apple.atc` actually does. Empty means `Book`, which is the only
+    /// dataclass known to work on device as of 2026-10-07; the Rust side derives
+    /// a *guessed* sync root (`<Name>/Sync`) for anything else.
+    ///
+    /// Returns the **raw JSON** of the run, not a decoded `[RemoteEntry]`: a
+    /// research target is a measurement, and the diagnostics in the payload (and
+    /// in the log) are the result the sweep is for — a decoded row list would
+    /// hide exactly the rows that matter. Decoding is the caller's job.
+    ///
+    /// Deliberately writes **no** cache. Neither `listingCache` nor
+    /// `houseCache` is touched here: a research target is not a browsable path,
+    /// and seeding `listingCache` would make `cachedListing(for:)` serve a
+    /// research listing to the normal browser — poisoning browsing with a row
+    /// set that was produced by a different code path, on a directory the ATC
+    /// move may have left half-restored.
+    ///
+    /// BLOCKS for several seconds (two AirTraffic syncs). Call it off the main
+    /// thread, one row at a time; the outstanding-asset journal is shared, so
+    /// two concurrent rows corrupt each other. See RESEARCH.md.
+    func researchListDir(path: String, dataclass: String) -> Result<String, String> {
+        let api = "al_research_list_dir"
+        let pairingPath = PairingController.pairingFilePath()
+        return queue.sync { () -> Result<String, String> in
+            var outJSON: UnsafeMutablePointer<CChar>?
+            var outError: UnsafeMutablePointer<CChar>?
+            let rc = pairingPath.withCString { pairC in
+                path.withCString { pathC in
+                    dataclass.withCString { classC in
+                        al_research_list_dir(pairC, pathC, airLiftLogCallback, nil, &outJSON, &outError, classC)
+                    }
+                }
+            }
+            let json = outJSON.flatMap { String(validatingUTF8: $0) }
+            let err = outError.flatMap { String(validatingUTF8: $0) }
+            if let p = outJSON { al_string_free(p) }
+            if let p = outError { al_string_free(p) }
+            if rc != 0 {
+                let message = err ?? "\(api) returned \(rc) with no error string"
+                print("[airlift] \(api)(\(path), dataclass: \(dataclass)) failed rc=\(rc): \(message)")
+                return .failure(message)
+            }
+            guard let json else {
+                let message = "\(api)(\(path), dataclass: \(dataclass)) succeeded but returned no JSON"
+                print("[airlift] \(message)")
+                return .failure(message)
+            }
+            return .success(json)
+        }
+    }
+
+    /// RESEARCH ONLY — `al_research_list_dir_any_path`: as
+    /// [`researchListDir(path:dataclass:)`], with a **root-relative `AssetID`** so
+    /// the pull can target a filesystem branch other than `/var/mobile`.
+    ///
+    /// `researchListDir(path:dataclass:)` still derives its `AssetID` relative to
+    /// `/var/mobile`, so an out-of-`/var/mobile` path is refused there before
+    /// STEP A — it cannot answer the question at all. This entry point is the one
+    /// that can, by spelling the `AssetID` as `"../".repeat(depth) + path`.
+    ///
+    /// `syncRootDir` is that dataclass's AFC-relative sync directory (`"Music/Sync"`);
+    /// empty means the `Book` default `Books/Sync`. A non-empty value is a
+    /// **derived guess** — no non-`Book` AirTraffic sync root is known as of
+    /// 2026-10-07 — which is why it is a parameter instead of being hard-coded.
+    ///
+    /// Raw JSON, no cache and no decode, for the same reasons as
+    /// [`researchListDir(path:dataclass:)`]; that comment is the contract.
+    ///
+    /// One caveat the caller has to surface: the STEP D recovery record is still
+    /// validated by the *shipping* guard, so `al_airlift_recover` reports a record
+    /// written for an out-of-`/var/mobile` target as `rejected` instead of
+    /// replaying it. A run that ends `kept at Airlock/Read/<T>` on such a path has
+    /// to be finished by hand. See RESEARCH.md.
+    func researchListDirAnyPath(path: String, dataclass: String, syncRootDir: String) -> Result<String, String> {
+        let api = "al_research_list_dir_any_path"
+        let pairingPath = PairingController.pairingFilePath()
+        return queue.sync { () -> Result<String, String> in
+            var outJSON: UnsafeMutablePointer<CChar>?
+            var outError: UnsafeMutablePointer<CChar>?
+            let rc = pairingPath.withCString { pairC in
+                path.withCString { pathC in
+                    dataclass.withCString { classC in
+                        syncRootDir.withCString { rootC in
+                            al_research_list_dir_any_path(pairC, pathC, airLiftLogCallback, nil, &outJSON, &outError, classC, rootC)
+                        }
+                    }
+                }
+            }
+            let json = outJSON.flatMap { String(validatingUTF8: $0) }
+            let err = outError.flatMap { String(validatingUTF8: $0) }
+            if let p = outJSON { al_string_free(p) }
+            if let p = outError { al_string_free(p) }
+            if rc != 0 {
+                let message = err ?? "\(api) returned \(rc) with no error string"
+                print("[airlift] \(api)(\(path), dataclass: \(dataclass), root: \(syncRootDir)) failed rc=\(rc): \(message)")
+                return .failure(message)
+            }
+            guard let json else {
+                let message = "\(api)(\(path), dataclass: \(dataclass)) succeeded but returned no JSON"
                 print("[airlift] \(message)")
                 return .failure(message)
             }
