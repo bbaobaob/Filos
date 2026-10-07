@@ -458,8 +458,12 @@ struct FileBrowserView: View {
     }
 
     /// Apply whatever the loop-guarded ATC move decided. A refusal or an
-    /// already-spent attempt becomes the error state with the Retry button, so
-    /// trying again is always a deliberate tap.
+    /// already-spent attempt becomes the error state with the Retry button — but
+    /// a container root that could not be pulled falls back to synthetic rows
+    /// for its standard child folders (see `apiSynthesiseContainerChildren`), so
+    /// the screen is still navigable. The Books daemon answers `FileComplete`
+    /// but never materialises a moved container root (20 s of `ObjectNotFound`
+    /// in `Airlock/Read`), while pulls of plain directories succeed.
     private func handleMoveOutcome(_ outcome: AirLiftBrowse.MoveOutcome, path: String) {
         switch outcome {
         case .listed(let entries):
@@ -471,12 +475,53 @@ struct FileBrowserView: View {
                 applyRemoteListing(entries)
             case .failure(let message):
                 print("[!] ATC read of \(path) is not retried automatically: \(message)")
-                failRemoteListing(message)
+                if apiSynthesiseContainerChildrenIfPossible(path) == nil {
+                    failRemoteListing(message)
+                }
             }
         case .refused(let message):
             print("[!] ATC read of \(path) refused: \(message)")
-            failRemoteListing(message)
+            if apiSynthesiseContainerChildrenIfPossible(path) == nil {
+                failRemoteListing(message)
+            }
         }
+    }
+
+    /// For a path that IS a container root (`Application/<UUID>` or
+    /// `AppGroup/<UUID>`) whose ATC pull failed, show the three standard iOS
+    /// container folders as rows. Each row carries the REAL subdirectory URL,
+    /// so tapping it starts an ATC pull of that directory — and plain
+    /// directories are the ones the Books move does materialise (the AppGroup
+    /// root and its parent-group pulls work; container roots do not).
+    /// Every row still keeps a note in the log. Returns a description of the
+    /// fallback it applied, or nil when `path` is not a container root.
+    @discardableResult
+    private func apiSynthesiseContainerChildrenIfPossible(_ path: String) -> String? {
+        guard let children = Self.containerRootChildren(path) else { return nil }
+        let note = "Books could not move the container root itself; showing its standard folders"
+        print("[airlift] \(note) — \(path) → \(children.map(\.name).joined(separator: ", "))")
+        let items = children.map { child in
+            remoteFileItem(name: child.name, isDirectory: true, size: 0, url: child.url)
+        }
+        publishListing(sortFiles(files: items))
+        return note
+    }
+
+    /// `Documents`, `Library`, `tmp` as real child URLs when `path` is a
+    /// container root (`Application/<UUID>` or `AppGroup/<UUID>`), else nil.
+    static func containerRootChildren(_ path: String) -> [(name: String, url: URL)]? {
+        let normalized = AirLiftBrowse.normalizeDevicePath(path)
+        for prefix in ["/var/mobile/Containers/Data/Application/",
+                       "/var/mobile/Containers/Shared/AppGroup/"] {
+            guard normalized.hasPrefix(prefix) else { continue }
+            let rest = String(normalized.dropFirst(prefix.count))
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !rest.isEmpty && !rest.contains("/") else { return nil }
+            return ["Documents", "Library", "tmp"].map { name in
+                (name: name, url: URL(fileURLWithPath: "\(path)/\(name)"))
+            }
+        }
+        return nil
     }
 
     /// Every remote path is enumerated on a background queue (tunnel opens
