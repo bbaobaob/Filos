@@ -1012,6 +1012,18 @@ fn preserved_rows(
         if identifiers.iter().any(|want| want == id) || ids.iter().any(|seen| seen == id) {
             continue;
         }
+        // Stale rows from an earlier this-app pull (its staging symlink, its
+        // recovered staging area, or a canary file it created) are noise the
+        // snapshot picked up from `Books/Sync/Books.plist` — a file this code
+        // writes itself, so a STEP D manifest written minutes ago is still in
+        // it. Keeping those rows makes the daemon attempt five downloads at
+        // once and turns a reproducible pull into a coin flip: on device the
+        // AppGroup root pulled fine with one stale row present, and every
+        // app-container pull failed with four. Only a genuine library row (one
+        // that names nothing of ours) is preserved.
+        if id.contains("airlift-") {
+            continue;
+        }
         if ids.len() >= MAX_PRESERVED_ROWS {
             break;
         }
@@ -1643,10 +1655,12 @@ fn kept_at_error(token: &str, reason: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// How many times `Airlock/Read/<T>` is re-listed after STEP B, and how long to
-/// wait between attempts: 60 × 1 s ≈ 60 s of grace. The observed move delay was
-/// a couple of seconds, but that was the fast path — the slow path needs to be
-/// waited out rather than declared missing.
-const STAGING_POLL_ATTEMPTS: usize = 60;
+/// wait between attempts: 20 × 1 s ≈ 20 s of grace. A real move has been
+/// observed to complete in ~2 s; on-device testing showed that a move that has
+/// not materialised within 20 s never does, and longer waits only stall the
+/// browse. The periodic `Airlock/Read` dump below is what distinguishes "slow"
+/// from "refused".
+const STAGING_POLL_ATTEMPTS: usize = 20;
 const STAGING_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// Shorter poll after STEP C — that move is already under way.
 const RESTORE_POLL_ATTEMPTS: usize = 4;
@@ -1704,7 +1718,7 @@ async fn wait_for_staged_listing(
                 // per-directory error above only ever says "not there", so this
                 // is the only evidence of a directory the daemon nested under
                 // our token instead of moving.
-                if matches!(attempt, 10 | 30 | 60) {
+                if matches!(attempt, 5 | 10 | 20) {
                     match afc.list_dir(AIRLOCK_READ).await {
                         Ok(names) => logger.log(format!(
                             "airlift: DIAG Airlock/Read listing now: {names:?}"
