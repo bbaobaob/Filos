@@ -51,8 +51,13 @@ device and record whether `Airlock/Read/<T>` ever became listable.
 
 Which entry point to use depends on where the path lives:
 
-* `/var/mobile/…` — either one works. `al_research_list_dir` is the one every
-  verified result came from, so keep using it for those rows.
+* `/var/mobile/…` — `al_research_list_dir_any_path` is the one to use. It is the
+  only one that goes through the *research* driver (`research_parent_and_basename`
+  and the research `AssetID` arithmetic); `al_research_list_dir` used to call the
+  shipping driver, so for `/var/mobile/Library` it refused the target with the
+  shipping parent rule and measured Airlift's own policy, not the daemon. With
+  the default sync root the two spellings resolve to the same place, so nothing
+  is lost by using the research entry point throughout.
 * outside `/var/mobile` — `al_research_list_dir` refuses them *itself*, before
   STEP A, so it cannot answer the question at all. Use
   `al_research_list_dir_any_path` (see below).
@@ -63,7 +68,7 @@ Which entry point to use depends on where the path lives:
 | `/var/mobile/Containers/Shared/AppGroup/<uuid>` | accepted | **verified: fails** |
 | `/var/mobile/Containers/Data/Application/<uuid>` | accepted | **verified: fails** |
 | `/var/mobile/Library/Preferences` | accepted | untested |
-| `/var/mobile/Library` | accepted | untested |
+| `/var/mobile/Library` | accepted | **verified on device (iOS 27.0): REFUSED** — see below |
 | `/var/containers/…/com.apple.MobileGestalt.plist` | accepted | untested — needs `any_path` |
 | `/var/containers/Data/System` | accepted | untested — needs `any_path` |
 | `/Library/MobileDevice/ProvisioningProfiles` | accepted | untested — needs `any_path` |
@@ -74,9 +79,55 @@ Which entry point to use depends on where the path lives:
 | `/Airlock`, `/var/mobile/Airlock`, `/Books.plist` | refused (reserved) | n/a |
 | `""`, `relative/path` | refused | n/a |
 
-## Root-relative `AssetID` (`al_research_list_dir_any_path`) — UNTESTED
+## Measured: `/var/mobile/Library` is refused by the daemon
 
-The MobileGestalt cache is the reason this exists:
+First row ever to measure `com.apple.atc` rather than our own guard. iOS 27.0,
+iPhone12,5, via `al_research_list_dir_any_path` with the default (Books) root.
+Everything on the wire was accepted and every step ran to completion:
+
+```
+STEP A verified airlift-pull-<T>/p0/p1/p2/link -> ../../../var/mobile
+STEP B AssetManifest keys present = [Book]
+STEP B manifest entries=[…, ../../../../../var/mobile/Library IsDownload=true]
+STEP B FileComplete AssetID=../../../../../var/mobile/Library Dataclass=Book
+STEP B pull: ATC session finished
+Airlock/Read/<T> not listable yet (1..20): Afc(ObjectNotFound)
+STEP B: never became listable after 20 attempts
+```
+
+`DataProtected=false`, `SyncFailed notices=0`, and the restore leg completed
+normally — so this is **not** a lock-screen failure and **not** a sync error. The
+daemon acknowledged the request, marked the asset `IsDownload=true`, then simply
+never materialised the move.
+
+What this rules in and out:
+
+* The `IsDownload=true` acknowledgement means the manifest was read and parsed.
+  The refusal happens **after** asset acceptance, during the move itself.
+* `Airlock/Read` stayed `[".", ".."]` across 20 s, so the destination was never
+  created — consistent with the daemon deciding not to move, not with it moving
+  somewhere we are not looking. (A move to a different name would have shown up
+  in the `Airlock/Read` listing.)
+* The restore leg's `FileComplete` for `airlift-link-<T>/Library` succeeded,
+  which proves the STEP C half of the primitive still works on a *successful*
+  pull's shape — the write side was never the problem.
+
+So the primitive is **not** a general "move any path the daemon can stat". The
+reach is narrower than `mobile`'s filesystem authority: `AppGroup` (a plain
+directory under `/var/mobile/Containers/Shared`) moves, `/var/mobile/Library`
+does not. Hypothesis 2 in the previous section — reach bounded by asset-type
+handling rather than location — now fits the evidence better than the others;
+hypothesis 3 is weakened, because the root-relative spelling was used here and
+still refused. Next rows to run: `/var/mobile/Library/Preferences`,
+`/var/mobile/Library/Caches`, and a plain app container child directory
+(`/var/mobile/Containers/Data/Application/<uuid>/Documents`) — that last one is
+the decisive one: if a container child moves while `/var/mobile/Library` does
+not, reach is container-scoped, not `mobile`-scoped.
+
+## Root-relative `AssetID` (`al_research_list_dir_any_path`)
+
+Now device-verified on the row above. The MobileGestalt cache is the reason this
+exists:
 
 ```
 /var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist
