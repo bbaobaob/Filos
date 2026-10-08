@@ -3438,11 +3438,12 @@ pub unsafe fn research_list_dir(
         let target = research_checked_path(&requested)?;
         // One ATC sync at a time, process-wide, shared with the AFC browser.
         let _guard = lock_tunnel("al_research_list_dir");
-        idevice_ffi::run_sync_local(pull_list_and_restore(
+        idevice_ffi::run_sync_local(research_pull_list_and_restore(
             &pairing_path,
             &target,
             new_item_base(),
             &dataclass,
+            &default_sync_root(),
             &logger
         ))
     });
